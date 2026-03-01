@@ -1,29 +1,36 @@
-# Deep Reinforcement Learning : 110m Hurdles
+# Deep Reinforcement Learning: 110m Hurdles
 
-![Démo des agents en pleine course](ML_Agents_Hurdle_Demo.gif)
+![Demo of agents running](ML_Agents_Hurdle_Demo.gif)
 
-## Aperçu du Projet
-Ce projet explore l'apprentissage par renforcement profond (Deep RL) appliqué à la physique continue. L'objectif : entraîner des agents articulés à maintenir leur équilibre, courir et sauter par-dessus des haies sur une piste de 110 mètres.
+## Project Overview
+This project explores deep reinforcement learning (Deep RL) applied to continuous physics. The goal: to train articulated agents to maintain their balance, run, and jump over hurdles on a 110-meter track.
 
-## Performances de l'IA
-* **Entraînement massif :** Modèles stabilisés après **100 Millions d'étapes (steps)** via une exécution *Headless* (multi-environnements en parallèle).
-* **Comportement émergent :** Les agents ont appris de manière autonome à coordonner leurs membres (Ragdoll physics) pour franchir les obstacles sans aucun script d'animation prédéfini.
-* **Inférence optimisée :** Modèles finaux intégrés via des réseaux de neurones `.onnx`.
+## AI Performance
+* **Massive Training:** Models stabilized after **100 million steps** via *Headless* execution (multi-environment parallel).
 
-## Les Agents
-* **Walker Agent (Bipède) :** Apprentissage complexe axé sur le balancier du corps et l'impulsion pour le saut.
-* **Crawler Agent (Quadrupède) :** Optimisation du centre de gravité et de la propulsion multi-membres.
+* **Emergent Behavior:** The agents autonomously learned to coordinate their limbs (Ragdoll physics) to overcome obstacles without any predefined animation scripts.
 
+* **Optimized Inference:** Final models integrated via `.onnx` neural networks.
 
-## Stack Technique
-* **Moteur 3D :** Unity (C#)
-* **Intelligence Artificielle :** Unity ML-Agents Toolkit
-* **Modélisation :** PyTorch / Exportation ONNX
+## The Agents
+* **Walker Agent (Biped):** Complex learning focused on body balance and impulse for jumping.
 
-## Comment tester le projet
-1. Clonez ce dépôt.
-2. Ouvrez le projet avec **Unity**.
-3. Chargez la scène principale d'entraînement.
-4. Vérifiez que les modèles finaux `.onnx` (présents dans `results/v1.4_M/`) sont bien assignés dans le champ **Model** du composant **Behavior Parameters** des agents.
-5. Passez le **Behavior Type** en `Inference Only`.
-6. Appuyez sur **Play** pour observer l'inférence en temps réel.
+* **Crawler Agent (Quadruped):** Optimization of center of gravity and multi-limb propulsion.
+
+## Technical Stack
+* **3D Engine:** Unity (C#)
+* **Artificial Intelligence:** Unity ML-Agents Toolkit
+* **Modeling:** PyTorch / ONNX Export
+
+## How to Test the Project
+1. Clone this repository.
+
+2. Open the project with **Unity**.
+
+3. Load the main training scene.
+
+4. Verify that the final `.onnx` models (located in `results/v1.4_M/`) are correctly assigned in the **Model** field of the **Behavior Parameters** component of the agents.
+
+5. Change the **Behavior Type** to `Inference Only`.
+
+6. Press **Play** to observe the inference in real time.
