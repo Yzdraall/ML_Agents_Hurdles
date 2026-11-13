@@ -1,22 +1,23 @@
 using UnityEngine;
 
+// Tracks whether a foot touches the floor. Uses a contact counter so that leaving one floor collider
+// while still touching another does not report "in the air".
 public class GroundContact : MonoBehaviour
 {
-    public bool IsTouchingGround { get; private set; }
-    private const string FLOORTAG = "floor";
+    int floorContacts;
 
-    private void OnCollisionEnter(Collision col)
+    public bool IsTouchingGround => floorContacts > 0;
+
+    // Called by the agent at the start of each episode (the body is teleported, pending contacts are stale).
+    public void ResetContacts() => floorContacts = 0;
+
+    void OnCollisionEnter(Collision collision)
     {
-        if (col.collider.CompareTag(FLOORTAG)) IsTouchingGround = true;
+        if (collision.collider.CompareTag(HurdleAgentBase.FloorTag)) floorContacts++;
     }
 
-    private void OnCollisionStay(Collision col)
+    void OnCollisionExit(Collision collision)
     {
-        if (col.collider.CompareTag(FLOORTAG)) IsTouchingGround = true;
-    }
-
-    private void OnCollisionExit(Collision col)
-    {
-        if (col.collider.CompareTag(FLOORTAG)) IsTouchingGround = false;
+        if (collision.collider.CompareTag(HurdleAgentBase.FloorTag)) floorContacts = Mathf.Max(0, floorContacts - 1);
     }
 }

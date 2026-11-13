@@ -1,20 +1,38 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.Serialization;
 
+// Frame-rate independent follow camera. Press Tab to cycle through the agents of the scene.
 public class CameraFollow : MonoBehaviour
 {
-    public Transform target; // Glissez le Crawler ici dans l'Inspecteur
-    public Vector3 offset = new Vector3(0, 5, -10); // Distance par rapport à l'agent
-    public float smoothSpeed = 0.125f;
+    [SerializeField] Transform target;
+    [Tooltip("Camera position relative to the target.")]
+    [SerializeField] Vector3 offset = new Vector3(0f, 5f, -10f);
+    [Tooltip("Higher = snappier follow (1/s).")]
+    [FormerlySerializedAs("smoothSpeed")]
+    [SerializeField] float followSharpness = 5f;
+
+    HurdleAgentBase[] agents;
+    int agentIndex = -1;
+
+    void Start()
+    {
+        agents = FindObjectsByType<HurdleAgentBase>(FindObjectsSortMode.InstanceID);
+    }
 
     void LateUpdate()
     {
-        if (target != null)
+        var keyboard = Keyboard.current;
+        if (keyboard != null && keyboard.tabKey.wasPressedThisFrame && agents.Length > 0)
         {
-            Vector3 desiredPosition = target.position + offset;
-            Vector3 smoothedPosition = Vector3.Lerp(transform.position, desiredPosition, smoothSpeed);
-            transform.position = smoothedPosition;
-
-            transform.LookAt(target); // La caméra regarde toujours l'agent
+            agentIndex = (agentIndex + 1) % agents.Length;
+            target = agents[agentIndex].Root;
         }
+
+        if (target == null) return;
+
+        float t = 1f - Mathf.Exp(-followSharpness * Time.deltaTime);
+        transform.position = Vector3.Lerp(transform.position, target.position + offset, t);
+        transform.LookAt(target);
     }
 }
