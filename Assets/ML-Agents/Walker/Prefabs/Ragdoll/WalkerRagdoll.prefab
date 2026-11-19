@@ -2728,7 +2728,6 @@ GameObject:
   m_Component:
   - component: {fileID: 3925309372585159072}
   - component: {fileID: 3599283675615088294}
-  - component: {fileID: 3599283675615088289}
   m_Layer: 0
   m_Name: WalkerRagdoll
   m_TagString: Untagged
@@ -2784,20 +2783,6 @@ MonoBehaviour:
   m_UseChildActuators: 1
   m_DeterministicInference: 0
   m_ObservableAttributeHandling: 0
---- !u!114 &3599283675615088289
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4409675767907316506}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 3a5c9d521e5ef4759a8246a07d52221e, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  DecisionPeriod: 5
-  TakeActionsBetweenDecisions: 1
 --- !u!1 &4677568880406971097
 GameObject:
   m_ObjectHideFlags: 0

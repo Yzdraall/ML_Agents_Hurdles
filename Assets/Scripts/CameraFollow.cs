@@ -16,9 +16,14 @@ public class CameraFollow : MonoBehaviour
     int agentIndex = -1;
 
     void Start()
+{
+    agents = FindObjectsByType<HurdleAgentBase>(FindObjectsSortMode.InstanceID);
+    if (target == null && agents.Length > 0)
     {
-        agents = FindObjectsByType<HurdleAgentBase>(FindObjectsSortMode.InstanceID);
+        agentIndex = 0;
+        target = agents[0].Root;
     }
+}
 
     void LateUpdate()
     {
