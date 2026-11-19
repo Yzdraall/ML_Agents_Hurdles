@@ -71,7 +71,7 @@ public abstract class HurdleAgentBase : Agent
 
     [Header("Termination")]
     [Tooltip("Episode ends when dot(root.up, world up) drops below this value.")]
-    [SerializeField, Range(-1f, 1f)] float uprightThreshold = 0.2f;
+    [SerializeField, Range(-1f, 1f)] float uprightThreshold = 0.35f;
 
     [Header("Curriculum & randomisation")]
     [Tooltip("Random shift (m) of each hurdle along the track at every episode.")]
@@ -126,6 +126,7 @@ public abstract class HurdleAgentBase : Agent
 
     Rigidbody rootBody;
     Vector3 rootStartPosition;
+    Vector3 rootLocalUp;
     Vector3 trackDirection;
     Vector3 trackRight;
     Quaternion toTrackFrame;
@@ -165,6 +166,13 @@ public abstract class HurdleAgentBase : Agent
 
     protected override void OnEnable()
     {
+        if (!TryGetComponent(out DecisionRequester requester))
+        {
+            requester = gameObject.AddComponent<DecisionRequester>();
+            requester.DecisionPeriod = 5;
+        }
+        requester.TakeActionsBetweenDecisions = true;
+
         // Body parts must be known before the Agent creates its policy and sensors.
         CacheBodyParts();
         SyncBrainParameters();
@@ -201,10 +209,23 @@ public abstract class HurdleAgentBase : Agent
     {
         if (bodyParts.Count > 0) return;
 
-        // The first rigidbody of the hierarchy is the root of the ragdoll.
-        if (root == null) root = GetComponentInChildren<Rigidbody>().transform;
+        // Auto-detect root body part: search for main body names before defaulting to first Rigidbody.
+        if (root == null)
+        {
+            foreach (var rb in GetComponentsInChildren<Rigidbody>())
+            {
+                string n = rb.name.ToLowerInvariant();
+                if (n == "body" || n == "hips" || n == "torso" || n == "pelvis")
+                {
+                    root = rb.transform;
+                    break;
+                }
+            }
+            if (root == null) root = GetComponentInChildren<Rigidbody>()?.transform;
+        }
         rootBody = root.GetComponent<Rigidbody>();
         rootStartPosition = root.position;
+        rootLocalUp = Quaternion.Inverse(root.rotation) * Vector3.up;
 
         int bodyLayer = LayerMask.NameToLayer(BodyLayerName);
         if (bodyLayer >= 0)
@@ -227,8 +248,8 @@ public abstract class HurdleAgentBase : Agent
             if (!rb.TryGetComponent(out BodyPartContact contact))
             {
                 contact = rb.gameObject.AddComponent<BodyPartContact>();
-                contact.CanTouchFloor = isFoot;
             }
+            contact.CanTouchFloor = isFoot;
             contact.Agent = this;
         }
 
@@ -526,7 +547,8 @@ public abstract class HurdleAgentBase : Agent
         maxProgress = Mathf.Max(maxProgress, progress);
         UpdateClearedHurdles(progress);
 
-        float upright = Vector3.Dot(root.up, Vector3.up);
+        Vector3 currentUp = root.rotation * rootLocalUp;
+        float upright = Vector3.Dot(currentUp, Vector3.up);
         if (root.position.y < rootStartPosition.y - FallMargin || upright < uprightThreshold)
         {
             EndEpisodeWithFall();
@@ -621,14 +643,15 @@ public abstract class HurdleAgentBase : Agent
 
     void RecordEpisodeStats()
     {
-        if (episodeSteps == 0) return;
+        if (episodeSteps == 0 && StepCount == 0) return;
+        int steps = episodeSteps > 0 ? episodeSteps : StepCount;
 
         var stats = Academy.Instance.StatsRecorder;
         stats.Add($"{behaviorName}/Hurdles Cleared", hurdlesCleared);
         stats.Add($"{behaviorName}/Hurdle Hits", hurdleHits);
         stats.Add($"{behaviorName}/Track Progress", finished ? 1f : Mathf.Clamp01(maxProgress / trackLength));
         stats.Add($"{behaviorName}/Finish Rate", finished ? 1f : 0f);
-        if (finished) stats.Add($"{behaviorName}/Finish Time (s)", episodeSteps * Time.fixedDeltaTime);
+        if (finished) stats.Add($"{behaviorName}/Finish Time (s)", steps * Time.fixedDeltaTime);
     }
 
     // Manual control for debugging:

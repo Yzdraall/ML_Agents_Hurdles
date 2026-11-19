@@ -44,6 +44,15 @@ public class BodyPartContact : MonoBehaviour
         else if (!canTouchFloor && other.CompareTag(floorTag)) owner.OnBodyPartTouchedFloor();
     }
 
+    void OnCollisionStay(Collision collision)
+    {
+        if (owner == null) return;
+
+        var other = collision.collider;
+        if (other.CompareTag(HurdleAgentBase.FinishTag)) owner.OnFinishReached();
+        else if (!canTouchFloor && other.CompareTag(floorTag)) owner.OnBodyPartTouchedFloor();
+    }
+
     void OnTriggerEnter(Collider other)
     {
         if (owner != null && other.CompareTag(HurdleAgentBase.FinishTag)) owner.OnFinishReached();

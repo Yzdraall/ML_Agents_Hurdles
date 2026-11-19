@@ -21,7 +21,7 @@ default_settings:
       gamma: 0.995
       strength: 1.0
   time_horizon: 1000
-  summary_freq: 50000
+  summary_freq: 20000
   keep_checkpoints: 5
   max_steps: 100000000
 

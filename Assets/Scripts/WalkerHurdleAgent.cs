@@ -6,7 +6,7 @@ public class WalkerHurdleAgent : HurdleAgentBase
 {
     [Header("Walker")]
     [Tooltip("Maximum drop (m) of the hips below their start height before the episode ends.")]
-    [SerializeField] float fallMargin = 2.75f;
+    [SerializeField] float fallMargin = 1.2f;
 
     protected override float FallMargin => fallMargin;
     protected override string BodyLayerName => "Walker";
