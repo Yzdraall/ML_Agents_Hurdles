@@ -27,6 +27,14 @@ public class CameraFollow : MonoBehaviour
     GUIStyle hudTitleStyle;
     GUIStyle hudBodyStyle;
 
+    void Awake()
+    {
+        if (!Application.isBatchMode) return;
+        if (TryGetComponent(out Camera cam)) cam.enabled = false;
+        if (TryGetComponent(out AudioListener listener)) listener.enabled = false;
+        enabled = false;
+    }
+
     void Start()
     {
         agents = FindObjectsByType<HurdleAgentBase>(FindObjectsSortMode.InstanceID);

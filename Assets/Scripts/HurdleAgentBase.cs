@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Unity.MLAgents;
@@ -9,8 +10,8 @@ using UnityEngine.InputSystem;
 using UnityEngine.Serialization;
 
 // Shared logic for the hurdle agents (bipedal walker and quadruped crawler):
-// body-part caching and full pose reset, joint actuation (multi-axis targets + strength per joint),
-// track-relative observations, ray perception, rewards, curriculum, randomisation and custom stats.
+// zero-GC flat-array body/muscle caching, kinematic hurdle rows (no static BVH rebuilds),
+// dirty-checked multi-axis slerp actuation, mass-weighted CoM velocity, anti-stall, and curriculum.
 [DefaultExecutionOrder(-100)]
 public abstract class HurdleAgentBase : Agent
 {
@@ -33,6 +34,10 @@ public abstract class HurdleAgentBase : Agent
 
     static readonly FieldInfo RequesterAgentField =
         typeof(DecisionRequester).GetField("m_Agent", BindingFlags.Instance | BindingFlags.NonPublic);
+    static readonly RaycastHit[] FloorHitsBuffer = new RaycastHit[32];
+    static readonly Comparison<Hurdle> CompareStartAlong = (a, b) => a.startAlong.CompareTo(b.startAlong);
+    static readonly Comparison<Hurdle> CompareAlong = (a, b) => a.along.CompareTo(b.along);
+    static bool allLanesAssigned;
 
     [Header("Track")]
     [Tooltip("Finish line of this agent's lane. The track runs straight to the nearest point of its collider.")]
@@ -108,23 +113,28 @@ public abstract class HurdleAgentBase : Agent
     struct BodyPart
     {
         public Rigidbody rb;
+        public Transform tr;
         public Vector3 startPosition;
         public Quaternion startRotation;
+        public float mass;
     }
 
-    class Muscle
+    struct Muscle
     {
         public ConfigurableJoint joint;
+        public Transform tr;
         public Rigidbody rb;
         public bool x, y, z;
+        public float lowX, highX, limY, limZ;
         public float strength;
+        public float lastX, lastY, lastZ, lastStrength;
         public int ActionCount => (x ? 1 : 0) + (y ? 1 : 0) + (z ? 1 : 0) + 1;
     }
 
-    // A hurdle of the lane: the tagged objects standing at the same distance along the track.
-    class Hurdle
+    // A hurdle row of the lane: kinematic pieces standing at the same distance along the track.
+    sealed class Hurdle
     {
-        public readonly List<HurdlePiece> pieces = new List<HurdlePiece>();
+        public HurdlePiece[] pieces;
         public float startAlong;
         public float halfDepth;
         public float along;
@@ -135,16 +145,17 @@ public abstract class HurdleAgentBase : Agent
     struct HurdlePiece
     {
         public Transform body;
+        public Rigidbody kinematicRb;
+        public GameObject go;
         public Vector3 startPosition;
         public float startTop;
-        // Height of the top above the running surface: the part scaled by the curriculum.
         public float height;
     }
 
-    readonly List<BodyPart> bodyParts = new List<BodyPart>();
-    readonly List<Muscle> muscles = new List<Muscle>();
-    readonly List<GroundContact> feet = new List<GroundContact>();
-    readonly List<Hurdle> hurdles = new List<Hurdle>();
+    BodyPart[] bodyParts = Array.Empty<BodyPart>();
+    Muscle[] muscles = Array.Empty<Muscle>();
+    GroundContact[] feet = Array.Empty<GroundContact>();
+    Hurdle[] hurdles = Array.Empty<Hurdle>();
     readonly Dictionary<Collider, Hurdle> colliderToHurdle = new Dictionary<Collider, Hurdle>();
 
     Rigidbody rootBody;
@@ -155,12 +166,24 @@ public abstract class HurdleAgentBase : Agent
     Vector3 trackDirection;
     Vector3 trackRight;
     Quaternion toTrackFrame;
+    Quaternion rayLookRotation;
     float trackLength;
+    float invTotalMass = 1f;
     int actionCount;
     float[] previousActions;
+    bool hasPreviousActions;
+
     string behaviorName;
+    string statHurdlesCleared;
+    string statHurdleHits;
+    string statTrackProgress;
+    string statFinishRate;
+    string statStallRate;
+    string statFinishTime;
+
     BehaviorParameters behaviorParams;
     Transform raySensorTransform;
+    bool bodyCached;
     bool trackGeometryReady;
     bool hurdlesCollected;
     DecisionRequester decisionRequester;
@@ -210,9 +233,9 @@ public abstract class HurdleAgentBase : Agent
     {
         get
         {
-            foreach (var foot in feet)
+            for (int i = 0; i < feet.Length; i++)
             {
-                if (foot.IsTouchingGround) return true;
+                if (feet[i].IsTouchingGround) return true;
             }
             return false;
         }
@@ -220,6 +243,9 @@ public abstract class HurdleAgentBase : Agent
 
     float Progress => Vector3.Dot(root.position - rootStartPosition, trackDirection);
     float LateralOffset => Vector3.Dot(root.position - rootStartPosition, trackRight);
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    static void ResetStaticState() => allLanesAssigned = false;
 
     protected override void OnEnable()
     {
@@ -234,12 +260,18 @@ public abstract class HurdleAgentBase : Agent
 
         base.OnEnable();
         BindDecisionRequester();
+
+        if (Academy.Instance.IsCommunicatorOn && !Application.isEditor)
+        {
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = -1;
+        }
     }
 
     void Start()
     {
         BindDecisionRequester();
-        EnsureLaneHurdlesCollected();
+        AssignAllLanesOnce();
     }
 
     void RemoveStrayBaseAgents()
@@ -288,24 +320,23 @@ public abstract class HurdleAgentBase : Agent
             Debug.LogError($"{name}: 'target' is not assigned in the Inspector. Using root forward as track direction.", this);
             Vector3 forward = Vector3.ProjectOnPlane(root.forward, Vector3.up);
             trackDirection = forward.sqrMagnitude > 1e-4f ? forward.normalized : Vector3.forward;
-            trackRight = Vector3.Cross(Vector3.up, trackDirection);
-            toTrackFrame = Quaternion.Inverse(Quaternion.LookRotation(trackDirection, Vector3.up));
             trackLength = 110f;
         }
         else
         {
             Vector3 toFinish = Vector3.ProjectOnPlane(ClosestFinishPoint() - rootStartPosition, Vector3.up);
             trackDirection = toFinish.sqrMagnitude > 1e-4f ? toFinish.normalized : Vector3.forward;
-            trackRight = Vector3.Cross(Vector3.up, trackDirection);
-            toTrackFrame = Quaternion.Inverse(Quaternion.LookRotation(trackDirection, Vector3.up));
             trackLength = Mathf.Max(0.01f, toFinish.magnitude);
         }
+
+        trackRight = Vector3.Cross(Vector3.up, trackDirection);
+        rayLookRotation = Quaternion.LookRotation(trackDirection, Vector3.up);
+        toTrackFrame = Quaternion.Inverse(rayLookRotation);
     }
 
     Vector3 ClosestFinishPoint()
     {
         if (!target.TryGetComponent(out Collider finish)) return target.position;
-        // Collider.ClosestPoint does not support concave mesh colliders.
         return finish is MeshCollider { convex: false }
             ? finish.bounds.ClosestPoint(rootStartPosition)
             : finish.ClosestPoint(rootStartPosition);
@@ -313,22 +344,24 @@ public abstract class HurdleAgentBase : Agent
 
     void CacheBodyParts()
     {
-        if (bodyParts.Count > 0) return;
+        if (bodyCached) return;
+        bodyCached = true;
 
-        // Auto-detect root body part: search for main body names before defaulting to first Rigidbody.
+        var rbs = GetComponentsInChildren<Rigidbody>();
         if (root == null)
         {
-            foreach (var rb in GetComponentsInChildren<Rigidbody>())
+            for (int i = 0; i < rbs.Length; i++)
             {
-                string n = rb.name.ToLowerInvariant();
+                string n = rbs[i].name.ToLowerInvariant();
                 if (n == "body" || n == "hips" || n == "torso" || n == "pelvis")
                 {
-                    root = rb.transform;
+                    root = rbs[i].transform;
                     break;
                 }
             }
-            if (root == null) root = GetComponentInChildren<Rigidbody>()?.transform;
+            if (root == null && rbs.Length > 0) root = rbs[0].transform;
         }
+
         rootBody = root.GetComponent<Rigidbody>();
         rootStartPosition = root.position;
         rootLocalUp = Quaternion.Inverse(root.rotation) * Vector3.up;
@@ -344,10 +377,23 @@ public abstract class HurdleAgentBase : Agent
             Debug.LogWarning($"{name}: physics layer '{BodyLayerName}' is missing, the rays may hit the agent's own body.", this);
         }
 
-        // Parents are returned before their children, so restoring world poses in this order is safe.
-        foreach (var rb in GetComponentsInChildren<Rigidbody>())
+        bodyParts = new BodyPart[rbs.Length];
+        float totalMass = 0f;
+        for (int i = 0; i < rbs.Length; i++)
         {
-            bodyParts.Add(new BodyPart { rb = rb, startPosition = rb.transform.position, startRotation = rb.transform.rotation });
+            var rb = rbs[i];
+            var tr = rb.transform;
+            float m = Mathf.Max(0.001f, rb.mass);
+            totalMass += m;
+
+            bodyParts[i] = new BodyPart
+            {
+                rb = rb,
+                tr = tr,
+                startPosition = tr.position,
+                startRotation = tr.rotation,
+                mass = m,
+            };
 
             bool isFoot = IsFootPart(rb);
             if (isFoot && !rb.TryGetComponent(out GroundContact _)) rb.gameObject.AddComponent<GroundContact>();
@@ -359,6 +405,7 @@ public abstract class HurdleAgentBase : Agent
             contact.CanTouchFloor = CanTouchFloor(rb);
             contact.Agent = this;
         }
+        invTotalMass = totalMass > 0f ? 1f / totalMass : 1f;
 
         float floorY = FloorHeightBelow(root.position + Vector3.up * 5f);
         hasTrackFloor = !float.IsNegativeInfinity(floorY);
@@ -376,47 +423,56 @@ public abstract class HurdleAgentBase : Agent
             {
                 Vector3 lift = Vector3.up * (targetMinY - minColliderY);
                 rootStartPosition += lift;
-                for (int i = 0; i < bodyParts.Count; i++)
-                {
-                    var part = bodyParts[i];
-                    part.startPosition += lift;
-                    bodyParts[i] = part;
-                }
+                for (int i = 0; i < bodyParts.Length; i++) bodyParts[i].startPosition += lift;
             }
         }
 
-        GetComponentsInChildren(feet);
+        feet = GetComponentsInChildren<GroundContact>();
 
+        var joints = GetComponentsInChildren<ConfigurableJoint>();
+        var muscleList = new List<Muscle>(joints.Length);
         actionCount = 0;
-        foreach (var joint in GetComponentsInChildren<ConfigurableJoint>())
+        for (int i = 0; i < joints.Length; i++)
         {
+            var joint = joints[i];
+            bool x = joint.angularXMotion != ConfigurableJointMotion.Locked;
+            bool y = joint.angularYMotion != ConfigurableJointMotion.Locked;
+            bool z = joint.angularZMotion != ConfigurableJointMotion.Locked;
+            if (!x && !y && !z) continue;
+
+            joint.rotationDriveMode = RotationDriveMode.Slerp;
             var muscle = new Muscle
             {
                 joint = joint,
+                tr = joint.transform,
                 rb = joint.GetComponent<Rigidbody>(),
-                x = joint.angularXMotion != ConfigurableJointMotion.Locked,
-                y = joint.angularYMotion != ConfigurableJointMotion.Locked,
-                z = joint.angularZMotion != ConfigurableJointMotion.Locked,
+                x = x,
+                y = y,
+                z = z,
+                lowX = joint.lowAngularXLimit.limit,
+                highX = joint.highAngularXLimit.limit,
+                limY = joint.angularYLimit.limit,
+                limZ = joint.angularZLimit.limit,
+                lastX = float.NaN,
+                lastY = float.NaN,
+                lastZ = float.NaN,
+                lastStrength = float.NaN,
             };
-            if (!muscle.x && !muscle.y && !muscle.z) continue;
-            // Every muscle uses the same drive model (see SetStrength), whatever the prefab or scene settings.
-            joint.rotationDriveMode = RotationDriveMode.Slerp;
-            muscles.Add(muscle);
+            ApplyDriveStrength(ref muscle, 1f);
+            muscleList.Add(muscle);
             actionCount += muscle.ActionCount;
-            SetStrength(muscle, 1f);
         }
+        muscles = muscleList.ToArray();
         previousActions = new float[actionCount];
     }
 
-    // Keeps the Behavior Parameters consistent with the body: observation and action sizes depend on
-    // the number of actuated joints, their free axes and the number of feet.
     void SyncBrainParameters()
     {
         if (!TryGetComponent(out behaviorParams)) return;
-        behaviorName = behaviorParams.BehaviorName;
+        SetBehaviorName(behaviorParams.BehaviorName);
 
         var brain = behaviorParams.BrainParameters;
-        int observationCount = CommonObservationCount + muscles.Count * ObservationsPerMuscle + feet.Count;
+        int observationCount = CommonObservationCount + muscles.Length * ObservationsPerMuscle + feet.Length;
         if (brain.VectorObservationSize == observationCount
             && brain.ActionSpec.NumContinuousActions == actionCount
             && brain.ActionSpec.NumDiscreteActions == 0)
@@ -430,102 +486,163 @@ public abstract class HurdleAgentBase : Agent
         brain.ActionSpec = ActionSpec.MakeContinuous(actionCount);
     }
 
-    void EnsureLaneHurdlesCollected()
+    void SetBehaviorName(string nameStr)
     {
-        if (hurdlesCollected) return;
-        hurdlesCollected = true;
-        if (target == null) return;
+        if (behaviorName == nameStr && statHurdlesCleared != null) return;
+        behaviorName = nameStr;
+        statHurdlesCleared = $"{behaviorName}/Hurdles Cleared";
+        statHurdleHits = $"{behaviorName}/Hurdle Hits";
+        statTrackProgress = $"{behaviorName}/Track Progress";
+        statFinishRate = $"{behaviorName}/Finish Rate";
+        statStallRate = $"{behaviorName}/Stall Rate";
+        statFinishTime = $"{behaviorName}/Finish Time (s)";
+    }
+
+    // Single-pass static builder: assigns all 560 hurdles across all 32 lanes once at startup
+    // and attaches kinematic Rigidbodies so episode hurdle jitter never triggers PhysX Static BVH rebuilds.
+    static void AssignAllLanesOnce()
+    {
+        if (allLanesAssigned) return;
+        allLanesAssigned = true;
 
         var allAgents = FindObjectsByType<HurdleAgentBase>(FindObjectsSortMode.None);
-        foreach (var agent in allAgents)
+        if (allAgents.Length == 0) return;
+
+        var tempRows = new Dictionary<HurdleAgentBase, List<(Hurdle row, List<HurdlePiece> pieces)>>(allAgents.Length);
+        for (int a = 0; a < allAgents.Length; a++)
         {
+            var agent = allAgents[a];
             agent.CacheBodyParts();
             agent.InitTrackGeometry();
+            agent.hurdlesCollected = true;
+            tempRows[agent] = new List<(Hurdle, List<HurdlePiece>)>(8);
         }
 
-        foreach (var go in GameObject.FindGameObjectsWithTag(HurdleTag))
+        var hurdleObjects = GameObject.FindGameObjectsWithTag(HurdleTag);
+        for (int h = 0; h < hurdleObjects.Length; h++)
         {
-            var col = go.GetComponent<Collider>();
-            if (col == null) col = go.GetComponentInChildren<Collider>();
+            var go = hurdleObjects[h];
+            if (!go.TryGetComponent(out Collider col)) col = go.GetComponentInChildren<Collider>();
             if (col == null) continue;
 
             Bounds bounds = col.bounds;
-            Vector3 offset = bounds.center - rootStartPosition;
-            float along = Vector3.Dot(offset, trackDirection);
-            if (along <= 0f || along >= trackLength) continue;
+            HurdleAgentBase bestOwner = null;
+            float bestLateral = float.PositiveInfinity;
+            float bestAlong = 0f;
+            int bestId = int.MaxValue;
 
-            float myLateral = Mathf.Abs(Vector3.Dot(offset, trackRight));
-            if (myLateral - Extent(bounds, trackRight) > laneMargin) continue;
+            for (int a = 0; a < allAgents.Length; a++)
+            {
+                var candidate = allAgents[a];
+                if (candidate.target == null) continue;
 
-            // Deterministically assign each hurdle collider only to the agent with the closest lane centre.
-            if (!IsClosestOwner(bounds, myLateral, allAgents)) continue;
+                Vector3 offset = bounds.center - candidate.rootStartPosition;
+                float along = Vector3.Dot(offset, candidate.trackDirection);
+                if (along <= 0f || along >= candidate.trackLength) continue;
 
-            // Objects overlapping along the track form a single hurdle (one row of the track).
-            float halfDepth = Extent(bounds, trackDirection);
-            float near = along - halfDepth;
-            float far = along + halfDepth;
-            var hurdle = hurdles.Find(h => near < h.startAlong + h.halfDepth && far > h.startAlong - h.halfDepth);
-            if (hurdle == null)
+                float lateral = Mathf.Abs(Vector3.Dot(offset, candidate.trackRight));
+                if (lateral - Extent(bounds, candidate.trackRight) > candidate.laneMargin) continue;
+
+                int id = candidate.GetInstanceID();
+                if (lateral < bestLateral - 1e-3f || (Mathf.Abs(lateral - bestLateral) <= 1e-3f && id < bestId))
+                {
+                    bestOwner = candidate;
+                    bestLateral = lateral;
+                    bestAlong = along;
+                    bestId = id;
+                }
+            }
+
+            if (bestOwner == null) continue;
+
+            // Make movable hurdle pieces kinematic so episode shifts update dynamic pruning in O(1) instead of rebuilding Static BVH.
+            if (!go.TryGetComponent(out Rigidbody kRb))
+            {
+                kRb = go.AddComponent<Rigidbody>();
+            }
+            kRb.isKinematic = true;
+            kRb.useGravity = false;
+            kRb.interpolation = RigidbodyInterpolation.None;
+
+            float halfDepth = Extent(bounds, bestOwner.trackDirection);
+            float near = bestAlong - halfDepth;
+            float far = bestAlong + halfDepth;
+
+            var ownerRows = tempRows[bestOwner];
+            int matchIdx = -1;
+            for (int r = 0; r < ownerRows.Count; r++)
+            {
+                var existing = ownerRows[r].row;
+                if (near < existing.startAlong + existing.halfDepth && far > existing.startAlong - existing.halfDepth)
+                {
+                    matchIdx = r;
+                    break;
+                }
+            }
+
+            Hurdle hurdle;
+            List<HurdlePiece> pieceList;
+            if (matchIdx < 0)
             {
                 hurdle = new Hurdle();
-                hurdles.Add(hurdle);
+                pieceList = new List<HurdlePiece>(2);
+                ownerRows.Add((hurdle, pieceList));
             }
             else
             {
+                (hurdle, pieceList) = ownerRows[matchIdx];
                 near = Mathf.Min(near, hurdle.startAlong - hurdle.halfDepth);
                 far = Mathf.Max(far, hurdle.startAlong + hurdle.halfDepth);
             }
+
             hurdle.startAlong = hurdle.along = (near + far) * 0.5f;
             hurdle.halfDepth = (far - near) * 0.5f;
             hurdle.top = Mathf.Max(hurdle.top, bounds.max.y);
 
             float floor = FloorHeightBelow(new Vector3(bounds.center.x, bounds.max.y, bounds.center.z));
             float surface = float.IsNegativeInfinity(floor) ? bounds.min.y : floor;
-            hurdle.pieces.Add(new HurdlePiece
+            pieceList.Add(new HurdlePiece
             {
                 body = go.transform,
+                kinematicRb = kRb,
+                go = go,
                 startPosition = go.transform.position,
                 startTop = bounds.max.y,
                 height = bounds.max.y - surface,
             });
-            colliderToHurdle[col] = hurdle;
+            bestOwner.colliderToHurdle[col] = hurdle;
         }
-        hurdles.Sort((a, b) => a.startAlong.CompareTo(b.startAlong));
 
-        if (hurdles.Count == 0) Debug.LogWarning($"{name}: no '{HurdleTag}' object found in this lane.", this);
-    }
-
-    bool IsClosestOwner(Bounds bounds, float myLateral, HurdleAgentBase[] allAgents)
-    {
-        int myId = GetInstanceID();
-        foreach (var other in allAgents)
+        for (int a = 0; a < allAgents.Length; a++)
         {
-            if (other == this || other.target == null) continue;
+            var agent = allAgents[a];
+            var rows = tempRows[agent];
+            var arr = new Hurdle[rows.Count];
+            for (int r = 0; r < rows.Count; r++)
+            {
+                rows[r].row.pieces = rows[r].pieces.ToArray();
+                arr[r] = rows[r].row;
+            }
+            Array.Sort(arr, CompareStartAlong);
+            agent.hurdles = arr;
 
-            Vector3 otherOffset = bounds.center - other.rootStartPosition;
-            float otherAlong = Vector3.Dot(otherOffset, other.trackDirection);
-            if (otherAlong <= 0f || otherAlong >= other.trackLength) continue;
-
-            float otherLateral = Mathf.Abs(Vector3.Dot(otherOffset, other.trackRight));
-            if (otherLateral - Extent(bounds, other.trackRight) > other.laneMargin) continue;
-
-            if (otherLateral < myLateral - 1e-3f) return false;
-            if (Mathf.Abs(otherLateral - myLateral) <= 1e-3f && other.GetInstanceID() < myId) return false;
+            if (arr.Length == 0 && agent.target != null)
+                Debug.LogWarning($"{agent.name}: no '{HurdleTag}' object found in this lane.", agent);
         }
-        return true;
     }
 
-    // Half size of a bounding box along a horizontal direction.
     static float Extent(Bounds bounds, Vector3 direction) =>
         Mathf.Abs(bounds.extents.x * direction.x) + Mathf.Abs(bounds.extents.z * direction.z);
 
-    // Height of the highest floor-tagged surface below a point (negative infinity if there is none).
+    // Zero-allocation floor raycast using shared static buffer.
     static float FloorHeightBelow(Vector3 point)
     {
+        int count = Physics.RaycastNonAlloc(point, Vector3.down, FloorHitsBuffer, 100f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
         float height = float.NegativeInfinity;
-        foreach (var hit in Physics.RaycastAll(point, Vector3.down, Mathf.Infinity, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+        for (int i = 0; i < count; i++)
         {
-            if (hit.collider.CompareTag(FloorTag)) height = Mathf.Max(height, hit.point.y);
+            if (FloorHitsBuffer[i].collider.CompareTag(FloorTag))
+                height = Mathf.Max(height, FloorHitsBuffer[i].point.y);
         }
         return height;
     }
@@ -533,13 +650,12 @@ public abstract class HurdleAgentBase : Agent
     void EnsureRaySensor()
     {
         int rayMask = Physics.DefaultRaycastLayers;
-        foreach (var layerName in AgentLayerNames)
+        for (int i = 0; i < AgentLayerNames.Length; i++)
         {
-            int layer = LayerMask.NameToLayer(layerName);
+            int layer = LayerMask.NameToLayer(AgentLayerNames[i]);
             if (layer >= 0) rayMask &= ~(1 << layer);
         }
 
-        // Reuse existing child if already present (prevents duplicate sensors on re-enable).
         Transform existing = transform.Find(RaySensorObjectName);
         if (existing != null)
         {
@@ -578,13 +694,13 @@ public abstract class HurdleAgentBase : Agent
     void UpdateRaySensorPose()
     {
         if (raySensorTransform == null || root == null) return;
-        raySensorTransform.SetPositionAndRotation(root.position, Quaternion.LookRotation(trackDirection, Vector3.up));
+        raySensorTransform.SetPositionAndRotation(root.position, rayLookRotation);
     }
 
     public override void OnEpisodeBegin()
     {
         RecordEpisodeStats();
-        EnsureLaneHurdlesCollected();
+        if (!hurdlesCollected) AssignAllLanesOnce();
 
         episodeEnding = true;
         spawnGraceSteps = SpawnSettleSteps;
@@ -592,8 +708,6 @@ public abstract class HurdleAgentBase : Agent
         ApplyHurdleLayout();
         ResetBody();
 
-        // episodeEnding is cleared at the next FixedUpdate: contacts still pending in this physics step
-        // belong to the previous episode.
         nextHurdleIndex = 0;
         hurdlesCleared = 0;
         hurdleHits = 0;
@@ -605,9 +719,9 @@ public abstract class HurdleAgentBase : Agent
         finished = false;
         stalled = false;
         episodeSteps = 0;
-        if (previousActions != null) System.Array.Clear(previousActions, 0, previousActions.Length);
+        hasPreviousActions = false;
 
-        foreach (var foot in feet) foot.ResetContacts();
+        for (int i = 0; i < feet.Length; i++) feet[i].ResetContacts();
         UpdateRaySensorPose();
     }
 
@@ -616,36 +730,42 @@ public abstract class HurdleAgentBase : Agent
         float heightScale = Mathf.Clamp01(Academy.Instance.EnvironmentParameters.GetWithDefault(HurdleHeightParameter, DefaultHurdleHeight));
         bool active = heightScale > MinHurdleHeightScale;
 
-        foreach (var hurdle in hurdles)
+        for (int h = 0; h < hurdles.Length; h++)
         {
+            var hurdle = hurdles[h];
             hurdle.active = active;
-            float shift = Random.Range(-hurdleSpacingJitter, hurdleSpacingJitter);
+            float shift = UnityEngine.Random.Range(-hurdleSpacingJitter, hurdleSpacingJitter);
             hurdle.along = hurdle.startAlong + shift;
             hurdle.top = float.NegativeInfinity;
 
-            // The pieces move together. Lower hurdles are sunk into the track rather than rescaled,
-            // which works whatever the mesh orientation.
-            foreach (var piece in hurdle.pieces)
+            var pieces = hurdle.pieces;
+            for (int p = 0; p < pieces.Length; p++)
             {
-                piece.body.gameObject.SetActive(active);
+                ref var piece = ref pieces[p];
+                if (piece.go.activeSelf != active) piece.go.SetActive(active);
+                if (!active) continue;
+
                 float sink = (1f - heightScale) * piece.height;
-                piece.body.position = piece.startPosition + trackDirection * shift + Vector3.down * sink;
+                Vector3 targetPos = piece.startPosition + trackDirection * shift + Vector3.down * sink;
+                piece.body.position = targetPos;
+                if (piece.kinematicRb != null) piece.kinematicRb.position = targetPos;
                 hurdle.top = Mathf.Max(hurdle.top, piece.startTop - sink);
             }
         }
-        hurdles.Sort((a, b) => a.along.CompareTo(b.along));
+        Array.Sort(hurdles, CompareAlong);
     }
 
     void ResetBody()
     {
-        Quaternion spin = Quaternion.AngleAxis(Random.Range(-startYawJitter, startYawJitter), Vector3.up);
-        Vector3 shift = trackRight * Random.Range(-startLateralJitter, startLateralJitter);
+        Quaternion spin = Quaternion.AngleAxis(UnityEngine.Random.Range(-startYawJitter, startYawJitter), Vector3.up);
+        Vector3 shift = trackRight * UnityEngine.Random.Range(-startLateralJitter, startLateralJitter);
 
-        foreach (var part in bodyParts)
+        for (int i = 0; i < bodyParts.Length; i++)
         {
+            ref var part = ref bodyParts[i];
             Vector3 position = rootStartPosition + spin * (part.startPosition - rootStartPosition) + shift;
             Quaternion rotation = spin * part.startRotation;
-            part.rb.transform.SetPositionAndRotation(position, rotation);
+            part.tr.SetPositionAndRotation(position, rotation);
             part.rb.position = position;
             part.rb.rotation = rotation;
             part.rb.linearVelocity = Vector3.zero;
@@ -653,10 +773,15 @@ public abstract class HurdleAgentBase : Agent
             part.rb.WakeUp();
         }
 
-        foreach (var muscle in muscles)
+        Quaternion neutralRot = NeutralJointRotation;
+        for (int m = 0; m < muscles.Length; m++)
         {
-            muscle.joint.targetRotation = NeutralJointRotation;
-            SetStrength(muscle, 1f);
+            ref var muscle = ref muscles[m];
+            muscle.joint.targetRotation = neutralRot;
+            muscle.lastX = float.NaN;
+            muscle.lastY = float.NaN;
+            muscle.lastZ = float.NaN;
+            ApplyDriveStrength(ref muscle, 1f);
         }
 
         Physics.SyncTransforms();
@@ -664,16 +789,18 @@ public abstract class HurdleAgentBase : Agent
 
     public override void CollectObservations(VectorSensor sensor)
     {
-        if (bodyParts.Count == 0) CacheBodyParts();
+        if (!bodyCached) CacheBodyParts();
         float safeTrackLength = Mathf.Max(0.01f, trackLength);
         float safeMaxDrift = Mathf.Max(0.1f, maxLaneDrift);
-
+        float invHeightScale = 1f / Mathf.Max(0.01f, heightObservationScale);
         float referenceY = hasTrackFloor ? trackFloorY : rootStartPosition.y;
+
+        Vector3 rootAngVel = rootBody.angularVelocity;
         sensor.AddObservation(toTrackFrame * rootBody.linearVelocity);
-        sensor.AddObservation(toTrackFrame * rootBody.angularVelocity);
+        sensor.AddObservation(toTrackFrame * rootAngVel);
         sensor.AddObservation(toTrackFrame * root.forward);
         sensor.AddObservation(toTrackFrame * root.up);
-        sensor.AddObservation((root.position.y - referenceY) / heightObservationScale);
+        sensor.AddObservation((root.position.y - referenceY) * invHeightScale);
 
         float progress = Progress;
         sensor.AddObservation(Mathf.Clamp01(progress / safeTrackLength));
@@ -683,7 +810,7 @@ public abstract class HurdleAgentBase : Agent
         if (next != null)
         {
             sensor.AddObservation(Mathf.Clamp((next.along - progress) / hurdleObservationRange, -0.2f, 1f));
-            sensor.AddObservation((next.top - referenceY) / heightObservationScale);
+            sensor.AddObservation((next.top - referenceY) * invHeightScale);
         }
         else
         {
@@ -691,27 +818,28 @@ public abstract class HurdleAgentBase : Agent
             sensor.AddObservation(0f);
         }
 
-        foreach (var muscle in muscles)
+        for (int m = 0; m < muscles.Length; m++)
         {
-            sensor.AddObservation(muscle.joint.transform.localRotation);
-            sensor.AddObservation(toTrackFrame * (muscle.rb.angularVelocity - rootBody.angularVelocity));
+            ref var muscle = ref muscles[m];
+            sensor.AddObservation(muscle.tr.localRotation);
+            sensor.AddObservation(toTrackFrame * (muscle.rb.angularVelocity - rootAngVel));
             sensor.AddObservation(muscle.strength);
         }
 
-        foreach (var foot in feet)
+        for (int f = 0; f < feet.Length; f++)
         {
-            sensor.AddObservation(foot.IsTouchingGround ? 1f : 0f);
+            sensor.AddObservation(feet[f].IsTouchingGround ? 1f : 0f);
         }
     }
 
-    // Keeps observing a hurdle slightly after root passes it so trailing legs still know its height.
     Hurdle NextObservedHurdle(float progress)
     {
-        int startIdx = Mathf.Max(0, nextHurdleIndex - 1);
-        for (int i = startIdx; i < hurdles.Count; i++)
+        int startIdx = nextHurdleIndex > 0 ? nextHurdleIndex - 1 : 0;
+        for (int i = startIdx; i < hurdles.Length; i++)
         {
-            if (hurdles[i].active && progress <= hurdles[i].along + hurdles[i].halfDepth + TrailingHurdleClearance)
-                return hurdles[i];
+            var h = hurdles[i];
+            if (h.active && progress <= h.along + h.halfDepth + TrailingHurdleClearance)
+                return h;
         }
         return null;
     }
@@ -727,24 +855,36 @@ public abstract class HurdleAgentBase : Agent
         int i = 0;
         float effort = 0f;
         float actionDeltaSq = 0f;
+        bool computeDelta = hasPreviousActions;
 
-        foreach (var muscle in muscles)
+        for (int m = 0; m < muscles.Length; m++)
         {
-            var joint = muscle.joint;
-            float x = muscle.x ? RecordAndClampAction(act, i++, ref actionDeltaSq) : 0f;
-            float y = muscle.y ? RecordAndClampAction(act, i++, ref actionDeltaSq) : 0f;
-            float z = muscle.z ? RecordAndClampAction(act, i++, ref actionDeltaSq) : 0f;
-            float strength = RecordAndClampAction(act, i++, ref actionDeltaSq);
-            effort += x * x + y * y + z * z + strength * strength;
+            ref var muscle = ref muscles[m];
+            float x = muscle.x ? ReadAction(act, i++, computeDelta, ref actionDeltaSq) : 0f;
+            float y = muscle.y ? ReadAction(act, i++, computeDelta, ref actionDeltaSq) : 0f;
+            float z = muscle.z ? ReadAction(act, i++, computeDelta, ref actionDeltaSq) : 0f;
+            float sAct = ReadAction(act, i++, computeDelta, ref actionDeltaSq);
+            effort += x * x + y * y + z * z + sAct * sAct;
 
-            // Targets stay inside each joint's own limits.
-            joint.targetRotation = Quaternion.Euler(
-                muscle.x ? Mathf.Lerp(joint.lowAngularXLimit.limit, joint.highAngularXLimit.limit, (x + 1f) * 0.5f) : 0f,
-                y * joint.angularYLimit.limit,
-                z * joint.angularZLimit.limit);
-            SetStrength(muscle, (strength + 1f) * 0.5f);
+            // Dirty-check: skip redundant native PhysX ConfigurableJoint writes on repeated DecisionRequester steps.
+            if (x != muscle.lastX || y != muscle.lastY || z != muscle.lastZ)
+            {
+                muscle.lastX = x;
+                muscle.lastY = y;
+                muscle.lastZ = z;
+                muscle.joint.targetRotation = Quaternion.Euler(
+                    muscle.x ? Mathf.Lerp(muscle.lowX, muscle.highX, (x + 1f) * 0.5f) : 0f,
+                    y * muscle.limY,
+                    z * muscle.limZ);
+            }
+
+            float normStrength = (sAct + 1f) * 0.5f;
+            if (normStrength != muscle.lastStrength)
+            {
+                ApplyDriveStrength(ref muscle, normStrength);
+            }
         }
-
+        hasPreviousActions = true;
         episodeSteps = StepCount;
 
         float safeMaxDrift = Mathf.Max(0.1f, maxLaneDrift);
@@ -756,7 +896,7 @@ public abstract class HurdleAgentBase : Agent
         // 1. Strict forward progress reward (cannot be farmed by going slowly or oscillating).
         float progress = Progress;
         float clampedProgress = Mathf.Clamp(progress, 0f, trackLength);
-        float deltaProgress = Mathf.Max(0f, clampedProgress - maxProgress);
+        float deltaProgress = clampedProgress - maxProgress;
         if (deltaProgress > 0f)
         {
             AddReward(progressRewardScale * (deltaProgress / trackLength) * lookAt * laneAlignment);
@@ -769,16 +909,15 @@ public abstract class HurdleAgentBase : Agent
             stallAnchorStep = StepCount;
         }
 
-        // 2. Dense forward velocity shaping (never punishes running faster than sprintTargetSpeed).
+        // 2. Mass-weighted CoM forward sprint shaping.
         AddReward(velocityShapingScale * ForwardSpeedReward() * lookAt * laneAlignment);
 
         // 3. Lane centering, time efficiency, effort, and smoothness costs.
-        AddReward(-laneCenterPenalty * driftFraction * driftFraction);
-        AddReward(-timePenalty);
+        AddReward(-laneCenterPenalty * driftFraction * driftFraction - timePenalty);
         if (actionCount > 0)
         {
-            AddReward(-effortPenalty * effort / actionCount);
-            AddReward(-smoothnessPenalty * actionDeltaSq / actionCount);
+            float invAct = 1f / actionCount;
+            AddReward((-effortPenalty * effort - smoothnessPenalty * actionDeltaSq) * invAct);
         }
 
         UpdateClearedHurdles(progress);
@@ -798,26 +937,35 @@ public abstract class HurdleAgentBase : Agent
         if (progress >= trackLength) OnFinishReached();
     }
 
-    float RecordAndClampAction(ActionSegment<float> act, int index, ref float deltaSqSum)
+    float ReadAction(ActionSegment<float> act, int index, bool computeDelta, ref float deltaSqSum)
     {
         float clamped = Mathf.Clamp(act[index], -1f, 1f);
         if (previousActions != null && index < previousActions.Length)
         {
-            float delta = clamped - previousActions[index];
-            deltaSqSum += delta * delta;
+            if (computeDelta)
+            {
+                float delta = clamped - previousActions[index];
+                deltaSqSum += delta * delta;
+            }
             previousActions[index] = clamped;
         }
         return clamped;
     }
 
+    // Mass-weighted Center-of-Mass (CoM) velocity: cannot be gamed by swinging light hands/feet.
     float ForwardSpeedReward()
     {
-        Vector3 averageVelocity = Vector3.zero;
-        foreach (var part in bodyParts) averageVelocity += part.rb.linearVelocity;
-        averageVelocity /= bodyParts.Count;
+        Vector3 comVelocity = Vector3.zero;
+        for (int i = 0; i < bodyParts.Length; i++)
+        {
+            comVelocity += bodyParts[i].rb.linearVelocity * bodyParts[i].mass;
+        }
+        comVelocity *= invTotalMass;
 
-        float forwardSpeed = Vector3.Dot(averageVelocity, trackDirection);
-        float lateralSpeed = Mathf.Abs(Vector3.Dot(averageVelocity, trackRight));
+        float forwardSpeed = Vector3.Dot(comVelocity, trackDirection);
+        if (forwardSpeed <= 0f) return 0f;
+
+        float lateralSpeed = Vector3.Dot(comVelocity, trackRight);
         float speedScore = Mathf.Clamp01(forwardSpeed / Mathf.Max(0.1f, sprintTargetSpeed));
         float lateralDamp = Mathf.Exp(-0.25f * lateralSpeed * lateralSpeed);
         return speedScore * lateralDamp;
@@ -825,14 +973,16 @@ public abstract class HurdleAgentBase : Agent
 
     float LookAtTrackReward()
     {
-        Vector3 heading = Vector3.ProjectOnPlane(root.forward, Vector3.up);
-        if (heading.sqrMagnitude < 1e-6f) return 0f;
-        return (Vector3.Dot(heading.normalized, trackDirection) + 1f) * 0.5f;
+        Vector3 fwd = root.forward;
+        Vector3 heading = new Vector3(fwd.x, 0f, fwd.z);
+        float sqrMag = heading.sqrMagnitude;
+        if (sqrMag < 1e-6f) return 0f;
+        return (Vector3.Dot(heading * (1f / Mathf.Sqrt(sqrMag)), trackDirection) + 1f) * 0.5f;
     }
 
     void UpdateClearedHurdles(float progress)
     {
-        while (nextHurdleIndex < hurdles.Count && progress > hurdles[nextHurdleIndex].along + hurdles[nextHurdleIndex].halfDepth)
+        while (nextHurdleIndex < hurdles.Length && progress > hurdles[nextHurdleIndex].along + hurdles[nextHurdleIndex].halfDepth)
         {
             if (hurdles[nextHurdleIndex].active)
             {
@@ -843,11 +993,10 @@ public abstract class HurdleAgentBase : Agent
         }
     }
 
-    // The agent owns the drives: slerp drive in acceleration mode, so the same spring and damper
-    // act alike on light and heavy body parts.
-    void SetStrength(Muscle muscle, float strength)
+    void ApplyDriveStrength(ref Muscle muscle, float strength)
     {
         muscle.strength = strength;
+        muscle.lastStrength = strength;
         muscle.joint.slerpDrive = new JointDrive
         {
             positionSpring = muscleStrength,
@@ -861,7 +1010,6 @@ public abstract class HurdleAgentBase : Agent
     {
         if (decisionRequester == null || decisionRequester.Agent != this) BindDecisionRequester();
         if (spawnGraceSteps > 0) spawnGraceSteps--;
-        // Contacts reported later in this physics step may still concern the previous episode's pose.
         episodeEnding = false;
         UpdateRaySensorPose();
     }
@@ -912,29 +1060,25 @@ public abstract class HurdleAgentBase : Agent
     void RecordEpisodeStats()
     {
         if (episodeSteps == 0 && StepCount == 0) return;
+        if (statHurdlesCleared == null) SetBehaviorName(behaviorName ?? "Agent");
         int steps = episodeSteps > 0 ? episodeSteps : StepCount;
 
         var stats = Academy.Instance.StatsRecorder;
-        stats.Add($"{behaviorName}/Hurdles Cleared", hurdlesCleared);
-        stats.Add($"{behaviorName}/Hurdle Hits", hurdleHits);
-        stats.Add($"{behaviorName}/Track Progress", finished ? 1f : Mathf.Clamp01(maxProgress / trackLength));
-        stats.Add($"{behaviorName}/Finish Rate", finished ? 1f : 0f);
-        stats.Add($"{behaviorName}/Stall Rate", stalled ? 1f : 0f);
-        if (finished) stats.Add($"{behaviorName}/Finish Time (s)", steps * Time.fixedDeltaTime);
+        stats.Add(statHurdlesCleared, hurdlesCleared);
+        stats.Add(statHurdleHits, hurdleHits);
+        stats.Add(statTrackProgress, finished ? 1f : Mathf.Clamp01(maxProgress / trackLength));
+        stats.Add(statFinishRate, finished ? 1f : 0f);
+        stats.Add(statStallRate, stalled ? 1f : 0f);
+        if (finished) stats.Add(statFinishTime, steps * Time.fixedDeltaTime);
     }
 
-    // Manual control for debugging:
-    //   [ / ]        select the previous / next joint (name logged in the console)
-    //   Up / Down    (or W / S) drive the selected joint around its X axis
-    //   Left / Right (or A / D) drive the selected joint around its Y axis
-    //   Space        drive an oscillating wave across all X joints
     public override void Heuristic(in ActionBuffers actionsOut)
     {
-        if (muscles.Count == 0) CacheBodyParts();
+        if (!bodyCached) CacheBodyParts();
 
         var act = actionsOut.ContinuousActions;
         for (int k = 0; k < act.Length; k++) act[k] = 0f;
-        if (muscles.Count == 0 || act.Length == 0) return;
+        if (muscles.Length == 0 || act.Length == 0) return;
 
         var keyboard = Keyboard.current;
         float driveX = 0f;
@@ -948,7 +1092,7 @@ public abstract class HurdleAgentBase : Agent
             if ((previousPressed && !previousKeyState) || (nextPressed && !nextKeyState))
             {
                 int step = nextPressed ? 1 : -1;
-                heuristicMuscle = (heuristicMuscle + step + muscles.Count) % muscles.Count;
+                heuristicMuscle = (heuristicMuscle + step + muscles.Length) % muscles.Length;
                 Debug.Log($"{name}: heuristic joint = {muscles[heuristicMuscle].joint.name}", this);
             }
             previousKeyState = previousPressed;
@@ -962,9 +1106,9 @@ public abstract class HurdleAgentBase : Agent
         }
 
         int i = 0;
-        for (int m = 0; m < muscles.Count; m++)
+        for (int m = 0; m < muscles.Length; m++)
         {
-            var muscle = muscles[m];
+            ref var muscle = ref muscles[m];
             bool selected = m == heuristicMuscle;
             if (muscle.x) act[i++] = flexAll ? Mathf.Sin(Time.time * 6f + m * 0.8f) : (selected ? driveX : 0f);
             if (muscle.y) act[i++] = selected ? driveY : 0f;

@@ -179,6 +179,13 @@ Tracked per behavior via `StatsRecorder`:
 - `<Behavior>/Stall Rate`
 - `<Behavior>/Finish Time (s)`
 
+### Engine & PhysX 5 Optimizations
+
+- **Temporal Gauss-Seidel (`TGS`) Solver** (`m_SolverType: 1`, `12` position / `2` velocity iterations, `75 Hz` fixed timestep) with calibrated `WorldBounds` across all 16 arenas and `m_GenerateOnTriggerStayEvents` disabled.
+- **Kinematic Hurdle Rows (Zero Static BVH Rebuilds)**: lane hurdles receive kinematic `Rigidbody` components at startup so per-episode spacing/height randomisation updates dynamic pruning in $O(1)$ instead of rebuilding PhysX's global Static Collider BVH.
+- **Zero-GC Hot Path & Dirty-Checked Joints**: flat contiguous `struct` arrays (`BodyPart[]`, `Muscle[]`), cached joint transforms/limits, reference-cached floor colliders (skipping `CompareTag` marshaling on `OnCollisionStay`), pre-cached `StatsRecorder` keys, mass-weighted Center-of-Mass (`CoM`) sprint velocity, and dirty-checked `ConfigurableJoint` writes (skips 80% of redundant native PhysX writes between decisions).
+- **Headless Batchmode Stripper**: automatically disables `Camera`, `AudioListener`, and HUD rendering when launched with `--no-graphics`.
+
 ---
 
 ## Training Analysis & Run History

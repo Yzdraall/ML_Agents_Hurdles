@@ -4,6 +4,8 @@ using UnityEngine;
 public class GroundContact : MonoBehaviour
 {
     bool touchingThisStep;
+    Collider cachedFloorCollider;
+
     public bool IsTouchingGround { get; private set; }
 
     public void ResetContacts()
@@ -20,8 +22,10 @@ public class GroundContact : MonoBehaviour
 
     void OnCollisionEnter(Collision collision)
     {
-        if (collision.collider.CompareTag(HurdleAgentBase.FloorTag))
+        var other = collision.collider;
+        if (ReferenceEquals(other, cachedFloorCollider) || other.CompareTag(HurdleAgentBase.FloorTag))
         {
+            cachedFloorCollider = other;
             touchingThisStep = true;
             IsTouchingGround = true;
         }
@@ -29,8 +33,11 @@ public class GroundContact : MonoBehaviour
 
     void OnCollisionStay(Collision collision)
     {
-        if (collision.collider.CompareTag(HurdleAgentBase.FloorTag))
+        if (touchingThisStep) return;
+        var other = collision.collider;
+        if (ReferenceEquals(other, cachedFloorCollider) || other.CompareTag(HurdleAgentBase.FloorTag))
         {
+            cachedFloorCollider = other;
             touchingThisStep = true;
             IsTouchingGround = true;
         }
