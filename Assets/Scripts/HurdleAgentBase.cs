@@ -793,14 +793,13 @@ public abstract class HurdleAgentBase : Agent
         float safeTrackLength = Mathf.Max(0.01f, trackLength);
         float safeMaxDrift = Mathf.Max(0.1f, maxLaneDrift);
         float invHeightScale = 1f / Mathf.Max(0.01f, heightObservationScale);
-        float referenceY = hasTrackFloor ? trackFloorY : rootStartPosition.y;
 
         Vector3 rootAngVel = rootBody.angularVelocity;
         sensor.AddObservation(toTrackFrame * rootBody.linearVelocity);
         sensor.AddObservation(toTrackFrame * rootAngVel);
         sensor.AddObservation(toTrackFrame * root.forward);
         sensor.AddObservation(toTrackFrame * root.up);
-        sensor.AddObservation((root.position.y - referenceY) * invHeightScale);
+        sensor.AddObservation((root.position.y - rootStartPosition.y) * invHeightScale);
 
         float progress = Progress;
         sensor.AddObservation(Mathf.Clamp01(progress / safeTrackLength));
@@ -810,7 +809,7 @@ public abstract class HurdleAgentBase : Agent
         if (next != null)
         {
             sensor.AddObservation(Mathf.Clamp((next.along - progress) / hurdleObservationRange, -0.2f, 1f));
-            sensor.AddObservation((next.top - referenceY) * invHeightScale);
+            sensor.AddObservation((next.top - rootStartPosition.y) * invHeightScale);
         }
         else
         {
