@@ -12,6 +12,7 @@ public class CrawlerHurdleAgent : HurdleAgentBase
     protected override float FallMargin => fallMargin;
     protected override string BodyLayerName => "Crawler";
     protected override string HurdleHeightParameter => "crawler_hurdle_height";
+    protected override float DefaultHurdleHeight => 0.55f;
     protected override float MinSpawnClearance => 0.5f * (Root != null ? Root.lossyScale.y : transform.lossyScale.y);
     protected override float MinHeightAboveFloor => 0.5f;
     protected override Quaternion NeutralJointRotation => Quaternion.Euler(neutralLegAngle, 0f, 0f);

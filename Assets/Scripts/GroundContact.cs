@@ -1,5 +1,6 @@
 using UnityEngine;
 
+[DefaultExecutionOrder(-110)]
 public class GroundContact : MonoBehaviour
 {
     bool touchingThisStep;
@@ -29,6 +30,9 @@ public class GroundContact : MonoBehaviour
     void OnCollisionStay(Collision collision)
     {
         if (collision.collider.CompareTag(HurdleAgentBase.FloorTag))
+        {
             touchingThisStep = true;
+            IsTouchingGround = true;
+        }
     }
 }

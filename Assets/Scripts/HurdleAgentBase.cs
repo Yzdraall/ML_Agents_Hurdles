@@ -22,12 +22,14 @@ public abstract class HurdleAgentBase : Agent
     static readonly string[] AgentLayerNames = { "Walker", "Crawler" };
 
     // Root velocity (3) + root angular velocity (3) + root forward (3) + root up (3)
-    // + root height (1) + track progress (1) + next hurdle distance & height (2).
-    const int CommonObservationCount = 16;
+    // + root height (1) + track progress (1) + lateral lane offset (1) + next hurdle distance & height (2).
+    const int CommonObservationCount = 17;
     // Local rotation (4) + angular velocity relative to the root (3) + current strength (1).
     const int ObservationsPerMuscle = 8;
     const float MinHurdleHeightScale = 0.01f;
+    const float TrailingHurdleClearance = 1.0f;
     const int SpawnSettleSteps = 30;
+    const string RaySensorObjectName = "HurdleRaySensor";
 
     static readonly FieldInfo RequesterAgentField =
         typeof(DecisionRequester).GetField("m_Agent", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -40,6 +42,8 @@ public abstract class HurdleAgentBase : Agent
     [SerializeField] Transform root;
     [Tooltip("A tagged hurdle belongs to this lane when its span comes within this lateral distance (m) of the lane centre line.")]
     [SerializeField] float laneMargin = 2f;
+    [Tooltip("Maximum lateral drift (m) from lane centre before the episode ends as out-of-lane.")]
+    [SerializeField] float maxLaneDrift = 2.2f;
     [Tooltip("Distance (m) used to normalise the next-hurdle distance observation.")]
     [SerializeField] float hurdleObservationRange = 20f;
     [Tooltip("Height (m) used to normalise the height observations.")]
@@ -64,20 +68,34 @@ public abstract class HurdleAgentBase : Agent
     [SerializeField, Range(0f, 1f)] float raySphereRadius = 0.5f;
 
     [Header("Rewards")]
-    [Tooltip("Speed (m/s) along the track that maximises the speed reward.")]
-    [SerializeField] float targetSpeed = 5f;
-    [Tooltip("Weight of the per-step reward speedMatch x lookAtTrack (both in [0, 1]).")]
-    [SerializeField] float speedRewardScale = 0.01f;
+    [Tooltip("Target forward sprint speed (m/s). Faster speeds are not penalised.")]
+    [SerializeField] float sprintTargetSpeed = 12f;
+    [Tooltip("Total reward distributed strictly along new forward track progress (un-farmable).")]
+    [SerializeField] float progressRewardScale = 15f;
+    [Tooltip("Per-step shaping reward for forward velocity aligned with the lane.")]
+    [SerializeField] float velocityShapingScale = 0.003f;
+    [Tooltip("Small per-step time penalty to encourage fast finishes instead of stalling.")]
+    [SerializeField] float timePenalty = 0.0015f;
+    [Tooltip("Per-step quadratic penalty for drifting laterally away from the lane centre.")]
+    [SerializeField] float laneCenterPenalty = 0.002f;
     [Tooltip("Weight of the effort cost: mean of the squared actions.")]
     [SerializeField] float effortPenalty = 0.002f;
+    [Tooltip("Weight of the action-smoothness cost: mean of squared action deltas between steps.")]
+    [SerializeField] float smoothnessPenalty = 0.001f;
     [SerializeField] float hurdleClearedReward = 0.5f;
     [SerializeField] float targetReachedReward = 10f;
+    [Tooltip("Extra bonus at finish scaled by remaining episode time (rewards faster times).")]
+    [SerializeField] float finishSpeedBonus = 10f;
     [SerializeField] float fallPenalty = -1f;
     [SerializeField] float hurdleHitPenalty = -0.5f;
 
     [Header("Termination")]
     [Tooltip("Episode ends when dot(root.up, world up) drops below this value.")]
     [SerializeField, Range(-1f, 1f)] float uprightThreshold = 0.15f;
+    [Tooltip("Maximum physics steps without meaningful forward progress before ending the episode (0 = disabled).")]
+    [SerializeField] int maxStallSteps = 300;
+    [Tooltip("Minimum forward progress (m) required to reset the stall timer.")]
+    [SerializeField] float minProgressAdvance = 0.25f;
 
     [Header("Curriculum & randomisation")]
     [Tooltip("Random shift (m) of each hurdle along the track at every episode.")]
@@ -123,12 +141,11 @@ public abstract class HurdleAgentBase : Agent
         public float height;
     }
 
-    static readonly HashSet<Collider> claimedHurdles = new HashSet<Collider>();
-
     readonly List<BodyPart> bodyParts = new List<BodyPart>();
     readonly List<Muscle> muscles = new List<Muscle>();
     readonly List<GroundContact> feet = new List<GroundContact>();
     readonly List<Hurdle> hurdles = new List<Hurdle>();
+    readonly Dictionary<Collider, Hurdle> colliderToHurdle = new Dictionary<Collider, Hurdle>();
 
     Rigidbody rootBody;
     Vector3 rootStartPosition;
@@ -140,20 +157,27 @@ public abstract class HurdleAgentBase : Agent
     Quaternion toTrackFrame;
     float trackLength;
     int actionCount;
+    float[] previousActions;
     string behaviorName;
+    BehaviorParameters behaviorParams;
     Transform raySensorTransform;
-    bool trackReady;
+    bool trackGeometryReady;
+    bool hurdlesCollected;
     DecisionRequester decisionRequester;
 
     // Episode state.
-    readonly HashSet<Collider> hitHurdles = new HashSet<Collider>();
+    readonly HashSet<Hurdle> hitHurdleRows = new HashSet<Hurdle>();
+    readonly HashSet<Collider> hitForeignHurdles = new HashSet<Collider>();
     bool episodeEnding;
     int spawnGraceSteps;
     int nextHurdleIndex;
     int hurdlesCleared;
     int hurdleHits;
     float maxProgress;
+    float stallAnchorProgress;
+    int stallAnchorStep;
     bool finished;
+    bool stalled;
     int episodeSteps;
 
     // Heuristic state.
@@ -162,11 +186,17 @@ public abstract class HurdleAgentBase : Agent
     bool nextKeyState;
 
     public Transform Root => root;
+    public string BehaviorName => behaviorName;
+    public float CurrentSpeed => rootBody != null ? rootBody.linearVelocity.magnitude : 0f;
+    public float TrackProgress01 => trackLength > 0.01f ? Mathf.Clamp01(Progress / trackLength) : 0f;
+    public int HurdlesClearedCount => hurdlesCleared;
+    public float EpisodeTimeSeconds => (episodeSteps > 0 ? episodeSteps : StepCount) * Time.fixedDeltaTime;
 
     protected abstract float FallMargin { get; }
     protected abstract string BodyLayerName { get; }
     // Environment parameter (config/hurdles.yaml) scaling the hurdle height: 0 = flat track, 1 = real height.
     protected abstract string HurdleHeightParameter { get; }
+    protected virtual float DefaultHurdleHeight => 1f;
     protected virtual float MinSpawnClearance => 0.02f;
     protected virtual float MinHeightAboveFloor => 0.5f;
     protected virtual Quaternion NeutralJointRotation => Quaternion.identity;
@@ -189,23 +219,28 @@ public abstract class HurdleAgentBase : Agent
     }
 
     float Progress => Vector3.Dot(root.position - rootStartPosition, trackDirection);
-
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-    static void ClearStaticState() => claimedHurdles.Clear();
+    float LateralOffset => Vector3.Dot(root.position - rootStartPosition, trackRight);
 
     protected override void OnEnable()
     {
         RemoveStrayBaseAgents();
         EnsureDecisionRequester();
 
-        // Body parts must be known before the Agent creates its policy and sensors.
+        // Body parts, track frame and ray sensor must exist before Agent.OnEnable creates sensors & policy.
         CacheBodyParts();
+        InitTrackGeometry();
+        EnsureRaySensor();
         SyncBrainParameters();
+
         base.OnEnable();
         BindDecisionRequester();
     }
 
-    void Start() => BindDecisionRequester();
+    void Start()
+    {
+        BindDecisionRequester();
+        EnsureLaneHurdlesCollected();
+    }
 
     void RemoveStrayBaseAgents()
     {
@@ -237,11 +272,17 @@ public abstract class HurdleAgentBase : Agent
 
     public override void Initialize()
     {
-        if (trackReady) return;
         CacheBodyParts();
+        InitTrackGeometry();
+        EnsureRaySensor();
         if (MaxStep == 0) MaxStep = 5250;
+    }
 
-        trackReady = true;
+    void InitTrackGeometry()
+    {
+        if (trackGeometryReady) return;
+        trackGeometryReady = true;
+
         if (target == null)
         {
             Debug.LogError($"{name}: 'target' is not assigned in the Inspector. Using root forward as track direction.", this);
@@ -258,10 +299,7 @@ public abstract class HurdleAgentBase : Agent
             trackRight = Vector3.Cross(Vector3.up, trackDirection);
             toTrackFrame = Quaternion.Inverse(Quaternion.LookRotation(trackDirection, Vector3.up));
             trackLength = Mathf.Max(0.01f, toFinish.magnitude);
-            CollectLaneHurdles();
         }
-
-        CreateRaySensor();
     }
 
     Vector3 ClosestFinishPoint()
@@ -367,16 +405,17 @@ public abstract class HurdleAgentBase : Agent
             actionCount += muscle.ActionCount;
             SetStrength(muscle, 1f);
         }
+        previousActions = new float[actionCount];
     }
 
     // Keeps the Behavior Parameters consistent with the body: observation and action sizes depend on
     // the number of actuated joints, their free axes and the number of feet.
     void SyncBrainParameters()
     {
-        var behavior = GetComponent<BehaviorParameters>();
-        behaviorName = behavior.BehaviorName;
+        if (!TryGetComponent(out behaviorParams)) return;
+        behaviorName = behaviorParams.BehaviorName;
 
-        var brain = behavior.BrainParameters;
+        var brain = behaviorParams.BrainParameters;
         int observationCount = CommonObservationCount + muscles.Count * ObservationsPerMuscle + feet.Count;
         if (brain.VectorObservationSize == observationCount
             && brain.ActionSpec.NumContinuousActions == actionCount
@@ -391,8 +430,19 @@ public abstract class HurdleAgentBase : Agent
         brain.ActionSpec = ActionSpec.MakeContinuous(actionCount);
     }
 
-    void CollectLaneHurdles()
+    void EnsureLaneHurdlesCollected()
     {
+        if (hurdlesCollected) return;
+        hurdlesCollected = true;
+        if (target == null) return;
+
+        var allAgents = FindObjectsByType<HurdleAgentBase>(FindObjectsSortMode.None);
+        foreach (var agent in allAgents)
+        {
+            agent.CacheBodyParts();
+            agent.InitTrackGeometry();
+        }
+
         foreach (var go in GameObject.FindGameObjectsWithTag(HurdleTag))
         {
             var col = go.GetComponent<Collider>();
@@ -404,11 +454,11 @@ public abstract class HurdleAgentBase : Agent
             float along = Vector3.Dot(offset, trackDirection);
             if (along <= 0f || along >= trackLength) continue;
 
-            // The agent may hit any object whose span comes within laneMargin of the lane centre line.
-            if (Mathf.Abs(Vector3.Dot(offset, trackRight)) - Extent(bounds, trackRight) > laneMargin) continue;
+            float myLateral = Mathf.Abs(Vector3.Dot(offset, trackRight));
+            if (myLateral - Extent(bounds, trackRight) > laneMargin) continue;
 
-            // A hurdle is driven (moved / sunk) by a single agent.
-            if (!claimedHurdles.Add(col)) continue;
+            // Deterministically assign each hurdle collider only to the agent with the closest lane centre.
+            if (!IsClosestOwner(bounds, myLateral, allAgents)) continue;
 
             // Objects overlapping along the track form a single hurdle (one row of the track).
             float halfDepth = Extent(bounds, trackDirection);
@@ -429,7 +479,6 @@ public abstract class HurdleAgentBase : Agent
             hurdle.halfDepth = (far - near) * 0.5f;
             hurdle.top = Mathf.Max(hurdle.top, bounds.max.y);
 
-            // The curriculum scales the height of the top above the running surface (above the box bottom if no floor is found).
             float floor = FloorHeightBelow(new Vector3(bounds.center.x, bounds.max.y, bounds.center.z));
             float surface = float.IsNegativeInfinity(floor) ? bounds.min.y : floor;
             hurdle.pieces.Add(new HurdlePiece
@@ -439,10 +488,31 @@ public abstract class HurdleAgentBase : Agent
                 startTop = bounds.max.y,
                 height = bounds.max.y - surface,
             });
+            colliderToHurdle[col] = hurdle;
         }
         hurdles.Sort((a, b) => a.startAlong.CompareTo(b.startAlong));
 
         if (hurdles.Count == 0) Debug.LogWarning($"{name}: no '{HurdleTag}' object found in this lane.", this);
+    }
+
+    bool IsClosestOwner(Bounds bounds, float myLateral, HurdleAgentBase[] allAgents)
+    {
+        int myId = GetInstanceID();
+        foreach (var other in allAgents)
+        {
+            if (other == this || other.target == null) continue;
+
+            Vector3 otherOffset = bounds.center - other.rootStartPosition;
+            float otherAlong = Vector3.Dot(otherOffset, other.trackDirection);
+            if (otherAlong <= 0f || otherAlong >= other.trackLength) continue;
+
+            float otherLateral = Mathf.Abs(Vector3.Dot(otherOffset, other.trackRight));
+            if (otherLateral - Extent(bounds, other.trackRight) > other.laneMargin) continue;
+
+            if (otherLateral < myLateral - 1e-3f) return false;
+            if (Mathf.Abs(otherLateral - myLateral) <= 1e-3f && other.GetInstanceID() < myId) return false;
+        }
+        return true;
     }
 
     // Half size of a bounding box along a horizontal direction.
@@ -460,7 +530,7 @@ public abstract class HurdleAgentBase : Agent
         return height;
     }
 
-    void CreateRaySensor()
+    void EnsureRaySensor()
     {
         int rayMask = Physics.DefaultRaycastLayers;
         foreach (var layerName in AgentLayerNames)
@@ -469,15 +539,29 @@ public abstract class HurdleAgentBase : Agent
             if (layer >= 0) rayMask &= ~(1 << layer);
         }
 
-        // The sensor lives on its own child so it can be kept level and aligned with the track.
-        var eyes = new GameObject("HurdleRaySensor");
-        raySensorTransform = eyes.transform;
-        raySensorTransform.SetParent(transform, false);
+        // Reuse existing child if already present (prevents duplicate sensors on re-enable).
+        Transform existing = transform.Find(RaySensorObjectName);
+        if (existing != null)
+        {
+            raySensorTransform = existing;
+        }
+        else
+        {
+            var eyes = new GameObject(RaySensorObjectName);
+            raySensorTransform = eyes.transform;
+            raySensorTransform.SetParent(transform, false);
+        }
+
         Vector3 parentScale = transform.lossyScale;
-        raySensorTransform.localScale = new Vector3(1f / parentScale.x, 1f / parentScale.y, 1f / parentScale.z);
+        raySensorTransform.localScale = new Vector3(
+            Mathf.Abs(parentScale.x) > 1e-4f ? 1f / parentScale.x : 1f,
+            Mathf.Abs(parentScale.y) > 1e-4f ? 1f / parentScale.y : 1f,
+            Mathf.Abs(parentScale.z) > 1e-4f ? 1f / parentScale.z : 1f);
         UpdateRaySensorPose();
 
-        var raySensor = eyes.AddComponent<RayPerceptionSensorComponent3D>();
+        if (!raySensorTransform.TryGetComponent(out RayPerceptionSensorComponent3D raySensor))
+            raySensor = raySensorTransform.gameObject.AddComponent<RayPerceptionSensorComponent3D>();
+
         raySensor.SensorName = "HurdleRays";
         raySensor.DetectableTags = new List<string> { HurdleTag, FloorTag, FinishTag };
         raySensor.RaysPerDirection = raysPerDirection;
@@ -488,17 +572,20 @@ public abstract class HurdleAgentBase : Agent
         raySensor.EndVerticalOffset = rayEndVerticalOffset;
         raySensor.RayLayerMask = rayMask;
         raySensor.AlternatingRayOrder = false;
+        raySensor.UseBatchedRaycasts = true;
     }
 
     void UpdateRaySensorPose()
     {
-        if (raySensorTransform == null) return;
+        if (raySensorTransform == null || root == null) return;
         raySensorTransform.SetPositionAndRotation(root.position, Quaternion.LookRotation(trackDirection, Vector3.up));
     }
 
     public override void OnEpisodeBegin()
     {
         RecordEpisodeStats();
+        EnsureLaneHurdlesCollected();
+
         episodeEnding = true;
         spawnGraceSteps = SpawnSettleSteps;
 
@@ -510,10 +597,15 @@ public abstract class HurdleAgentBase : Agent
         nextHurdleIndex = 0;
         hurdlesCleared = 0;
         hurdleHits = 0;
-        hitHurdles.Clear();
-        maxProgress = 0f;
+        hitHurdleRows.Clear();
+        hitForeignHurdles.Clear();
+        maxProgress = Mathf.Max(0f, Progress);
+        stallAnchorProgress = maxProgress;
+        stallAnchorStep = 0;
         finished = false;
+        stalled = false;
         episodeSteps = 0;
+        if (previousActions != null) System.Array.Clear(previousActions, 0, previousActions.Length);
 
         foreach (var foot in feet) foot.ResetContacts();
         UpdateRaySensorPose();
@@ -521,7 +613,7 @@ public abstract class HurdleAgentBase : Agent
 
     void ApplyHurdleLayout()
     {
-        float heightScale = Mathf.Clamp01(Academy.Instance.EnvironmentParameters.GetWithDefault(HurdleHeightParameter, 1f));
+        float heightScale = Mathf.Clamp01(Academy.Instance.EnvironmentParameters.GetWithDefault(HurdleHeightParameter, DefaultHurdleHeight));
         bool active = heightScale > MinHurdleHeightScale;
 
         foreach (var hurdle in hurdles)
@@ -574,21 +666,24 @@ public abstract class HurdleAgentBase : Agent
     {
         if (bodyParts.Count == 0) CacheBodyParts();
         float safeTrackLength = Mathf.Max(0.01f, trackLength);
+        float safeMaxDrift = Mathf.Max(0.1f, maxLaneDrift);
 
+        float referenceY = hasTrackFloor ? trackFloorY : rootStartPosition.y;
         sensor.AddObservation(toTrackFrame * rootBody.linearVelocity);
         sensor.AddObservation(toTrackFrame * rootBody.angularVelocity);
         sensor.AddObservation(toTrackFrame * root.forward);
         sensor.AddObservation(toTrackFrame * root.up);
-        sensor.AddObservation((root.position.y - rootStartPosition.y) / heightObservationScale);
+        sensor.AddObservation((root.position.y - referenceY) / heightObservationScale);
 
         float progress = Progress;
         sensor.AddObservation(Mathf.Clamp01(progress / safeTrackLength));
+        sensor.AddObservation(Mathf.Clamp(LateralOffset / safeMaxDrift, -1f, 1f));
 
-        var next = NextHurdle();
+        var next = NextObservedHurdle(progress);
         if (next != null)
         {
-            sensor.AddObservation(Mathf.Clamp01((next.along - progress) / hurdleObservationRange));
-            sensor.AddObservation((next.top - rootStartPosition.y) / heightObservationScale);
+            sensor.AddObservation(Mathf.Clamp((next.along - progress) / hurdleObservationRange, -0.2f, 1f));
+            sensor.AddObservation((next.top - referenceY) / heightObservationScale);
         }
         else
         {
@@ -609,28 +704,37 @@ public abstract class HurdleAgentBase : Agent
         }
     }
 
-    Hurdle NextHurdle()
+    // Keeps observing a hurdle slightly after root passes it so trailing legs still know its height.
+    Hurdle NextObservedHurdle(float progress)
     {
-        for (int i = nextHurdleIndex; i < hurdles.Count; i++)
+        int startIdx = Mathf.Max(0, nextHurdleIndex - 1);
+        for (int i = startIdx; i < hurdles.Count; i++)
         {
-            if (hurdles[i].active) return hurdles[i];
+            if (hurdles[i].active && progress <= hurdles[i].along + hurdles[i].halfDepth + TrailingHurdleClearance)
+                return hurdles[i];
         }
         return null;
     }
+
+    bool IsPolicyDriven =>
+        behaviorParams != null
+        && behaviorParams.BehaviorType != BehaviorType.HeuristicOnly
+        && (Academy.Instance.IsCommunicatorOn || behaviorParams.Model != null);
 
     public override void OnActionReceived(ActionBuffers actions)
     {
         var act = actions.ContinuousActions;
         int i = 0;
         float effort = 0f;
+        float actionDeltaSq = 0f;
 
         foreach (var muscle in muscles)
         {
             var joint = muscle.joint;
-            float x = muscle.x ? Mathf.Clamp(act[i++], -1f, 1f) : 0f;
-            float y = muscle.y ? Mathf.Clamp(act[i++], -1f, 1f) : 0f;
-            float z = muscle.z ? Mathf.Clamp(act[i++], -1f, 1f) : 0f;
-            float strength = Mathf.Clamp(act[i++], -1f, 1f);
+            float x = muscle.x ? RecordAndClampAction(act, i++, ref actionDeltaSq) : 0f;
+            float y = muscle.y ? RecordAndClampAction(act, i++, ref actionDeltaSq) : 0f;
+            float z = muscle.z ? RecordAndClampAction(act, i++, ref actionDeltaSq) : 0f;
+            float strength = RecordAndClampAction(act, i++, ref actionDeltaSq);
             effort += x * x + y * y + z * z + strength * strength;
 
             // Targets stay inside each joint's own limits.
@@ -643,19 +747,50 @@ public abstract class HurdleAgentBase : Agent
 
         episodeSteps = StepCount;
 
-        // Reward: speed along the track matching the target speed, while facing the track.
-        AddReward(speedRewardScale * SpeedMatchReward() * LookAtTrackReward());
-        if (actionCount > 0) AddReward(-effortPenalty * effort / actionCount);
+        float safeMaxDrift = Mathf.Max(0.1f, maxLaneDrift);
+        float absLateral = Mathf.Abs(LateralOffset);
+        float driftFraction = Mathf.Clamp01(absLateral / safeMaxDrift);
+        float laneAlignment = 1f - 0.5f * driftFraction;
+        float lookAt = LookAtTrackReward();
 
+        // 1. Strict forward progress reward (cannot be farmed by going slowly or oscillating).
         float progress = Progress;
-        maxProgress = Mathf.Max(maxProgress, progress);
+        float clampedProgress = Mathf.Clamp(progress, 0f, trackLength);
+        float deltaProgress = Mathf.Max(0f, clampedProgress - maxProgress);
+        if (deltaProgress > 0f)
+        {
+            AddReward(progressRewardScale * (deltaProgress / trackLength) * lookAt * laneAlignment);
+            maxProgress = clampedProgress;
+        }
+
+        if (maxProgress >= stallAnchorProgress + minProgressAdvance)
+        {
+            stallAnchorProgress = maxProgress;
+            stallAnchorStep = StepCount;
+        }
+
+        // 2. Dense forward velocity shaping (never punishes running faster than sprintTargetSpeed).
+        AddReward(velocityShapingScale * ForwardSpeedReward() * lookAt * laneAlignment);
+
+        // 3. Lane centering, time efficiency, effort, and smoothness costs.
+        AddReward(-laneCenterPenalty * driftFraction * driftFraction);
+        AddReward(-timePenalty);
+        if (actionCount > 0)
+        {
+            AddReward(-effortPenalty * effort / actionCount);
+            AddReward(-smoothnessPenalty * actionDeltaSq / actionCount);
+        }
+
         UpdateClearedHurdles(progress);
 
         float fallThresholdY = hasTrackFloor
             ? Mathf.Min(rootStartPosition.y - FallMargin, trackFloorY + MinHeightAboveFloor)
             : rootStartPosition.y - FallMargin;
-        if (spawnGraceSteps <= 0 && (root.position.y < fallThresholdY || !IsUpright))
+
+        bool hasStalled = maxStallSteps > 0 && IsPolicyDriven && (StepCount - stallAnchorStep >= maxStallSteps);
+        if (spawnGraceSteps <= 0 && (root.position.y < fallThresholdY || !IsUpright || absLateral > safeMaxDrift || hasStalled))
         {
+            stalled = hasStalled;
             EndEpisodeWithFall();
             return;
         }
@@ -663,15 +798,29 @@ public abstract class HurdleAgentBase : Agent
         if (progress >= trackLength) OnFinishReached();
     }
 
-    float SpeedMatchReward()
+    float RecordAndClampAction(ActionSegment<float> act, int index, ref float deltaSqSum)
+    {
+        float clamped = Mathf.Clamp(act[index], -1f, 1f);
+        if (previousActions != null && index < previousActions.Length)
+        {
+            float delta = clamped - previousActions[index];
+            deltaSqSum += delta * delta;
+            previousActions[index] = clamped;
+        }
+        return clamped;
+    }
+
+    float ForwardSpeedReward()
     {
         Vector3 averageVelocity = Vector3.zero;
         foreach (var part in bodyParts) averageVelocity += part.rb.linearVelocity;
         averageVelocity /= bodyParts.Count;
 
-        float error = Mathf.Clamp(Vector3.Distance(averageVelocity, trackDirection * targetSpeed), 0f, targetSpeed);
-        float normalisedError = error / targetSpeed;
-        return Mathf.Pow(1f - normalisedError * normalisedError, 2f);
+        float forwardSpeed = Vector3.Dot(averageVelocity, trackDirection);
+        float lateralSpeed = Mathf.Abs(Vector3.Dot(averageVelocity, trackRight));
+        float speedScore = Mathf.Clamp01(forwardSpeed / Mathf.Max(0.1f, sprintTargetSpeed));
+        float lateralDamp = Mathf.Exp(-0.25f * lateralSpeed * lateralSpeed);
+        return speedScore * lateralDamp;
     }
 
     float LookAtTrackReward()
@@ -710,7 +859,7 @@ public abstract class HurdleAgentBase : Agent
 
     protected virtual void FixedUpdate()
     {
-        BindDecisionRequester();
+        if (decisionRequester == null || decisionRequester.Agent != this) BindDecisionRequester();
         if (spawnGraceSteps > 0) spawnGraceSteps--;
         // Contacts reported later in this physics step may still concern the previous episode's pose.
         episodeEnding = false;
@@ -721,7 +870,17 @@ public abstract class HurdleAgentBase : Agent
 
     public void OnHurdleHit(Collider hurdleCollider)
     {
-        if (episodeEnding || !hitHurdles.Add(hurdleCollider)) return;
+        if (episodeEnding) return;
+
+        if (colliderToHurdle.TryGetValue(hurdleCollider, out var hurdleRow))
+        {
+            if (!hitHurdleRows.Add(hurdleRow)) return;
+        }
+        else if (!hitForeignHurdles.Add(hurdleCollider))
+        {
+            return;
+        }
+
         hurdleHits++;
         AddReward(hurdleHitPenalty);
     }
@@ -737,7 +896,9 @@ public abstract class HurdleAgentBase : Agent
         if (episodeEnding) return;
         episodeEnding = true;
         finished = true;
-        AddReward(targetReachedReward);
+
+        float remainingFraction = MaxStep > 0 ? Mathf.Clamp01(1f - (float)episodeSteps / MaxStep) : 0f;
+        AddReward(targetReachedReward + finishSpeedBonus * remainingFraction);
         EndEpisode();
     }
 
@@ -758,6 +919,7 @@ public abstract class HurdleAgentBase : Agent
         stats.Add($"{behaviorName}/Hurdle Hits", hurdleHits);
         stats.Add($"{behaviorName}/Track Progress", finished ? 1f : Mathf.Clamp01(maxProgress / trackLength));
         stats.Add($"{behaviorName}/Finish Rate", finished ? 1f : 0f);
+        stats.Add($"{behaviorName}/Stall Rate", stalled ? 1f : 0f);
         if (finished) stats.Add($"{behaviorName}/Finish Time (s)", steps * Time.fixedDeltaTime);
     }
 
