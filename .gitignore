@@ -104,5 +104,7 @@ InitTestScene*.unity*
 /results/
 /[Aa]ssets/ML-Agents/Timers/
 /[Aa]ssets/ML-Agents/Timers.meta
+*.pt
+*.pt.meta
 /venv/
 /.venv/
