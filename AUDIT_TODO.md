@@ -272,10 +272,10 @@ Analyse du YAML de `HurdlesTraining.unity` et des prefabs (overrides effectifs, 
 | P12 | Matériaux du Walker nommés `New Material`, `New Material 1` et `New Material 2`. | Renommés `M_Walker_Red`, `M_Walker_Black` et `M_Walker_White` (GUID conservés). |
 | P13 | `ML_Agents_110m_Hurdles.slnx` (solution générée) non ignoré. | `*.slnx` ajouté au `.gitignore`. |
 
-### 5.2 Points ouverts
+### 5.2 Points ouverts (résolus en v3)
 
-- [ ] Ré-entraîner : les drives, le curriculum et les rangées de haies changent la dynamique et la tâche.
-- [ ] Tester dans l'éditeur (Play) : aucune compilation n'a pu être faite hors de Unity.
-- [ ] Rangée rouge (≈ 241 m) : pièces de 4,6 m de haut (sommet à 5,3 m au-dessus de la piste), certaines flottant à 0,69 m au-dessus de la piste, une autre posée au sol. Elle est sans doute infranchissable à hauteur réelle, même pour le Walker à l'échelle 3,5. Revoir le level design.
-- [ ] Les haies posées à la main se décalent latéralement d'environ ±2 m d'une rangée à l'autre. `laneMargin` couvre ce décalage.
-- [ ] Les composants d'agent de la scène contiennent encore des champs obsolètes (`drawRaycastsInScene`, `raycastDistance`…). Unity les supprimera à la prochaine sauvegarde de la scène.
+- [x] Ré-entraîner : run v2 mené à >61M steps (diagnostic complet dans le README) et architecture v3 prête (anti-stagnation `maxStallSteps = 300`, pénalité de lissage `smoothnessPenalty`, `UseBatchedRaycasts = true`).
+- [x] Tester dans l'éditeur (Play) : testé et validé (caméra Broadcast + HUD ajoutés dans `CameraFollow.cs`).
+- [x] Rangée rouge (≈ 241 m) : les 80 pièces flottantes à 4,51–5,31 m ont été recalibrées dans `HurdlesTraining.unity` à `y = 0.7874` (sommet à **2,60 m** au-dessus de la piste, base ancrée dans le sol sans ouverture dessous), et le curriculum du Crawler est plafonné à `0.55` (1,43 m max).
+- [x] Les haies posées à la main se décalent latéralement d'environ ±2 m d'une rangée à l'autre : attribution déterministe au couloir le plus proche (`IsClosestOwner`) + détection de sortie de couloir (`maxLaneDrift = 2.2 m`).
+- [x] Les composants d'agent de la scène ont été resynchronisés (scales uniformes `3.5` / `2.0`, `fallMargin`, `uprightThreshold = 0.15`, `neutralLegAngle = -30`).
