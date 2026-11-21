@@ -117,15 +117,12 @@ Each behavior advances independently through 4 lessons based on smoothed mean ep
 
 When exporting newly trained brains with PyTorch 2.6+ (`mlagents==1.1.0`), PyTorch defaults to `dynamo=True`, producing opset-18 `.onnx` + `.onnx.data` files that break Unity Sentis (`ONNXConstantsLoader` reads external weights without seeking to `offset`, `action_masks`/`recurrent_in` remain 0-width, and action outputs have static batch `1`). Run the converter before pressing **Play**:
 
-1. Open `Assets/Scenes/HurdlesTraining.unity`.
-2. Copy `results/<run-id>/HurdleWalker.onnx` and `results/<run-id>/HurdleCrawler.onnx` (and their `.onnx.data` files if present) into `Assets/Models/Brains/`.
-3. Inline weights and fix dynamic batch / opset-15 shapes for Unity Sentis:
+1. Deploy, inline weights, and convert both brains directly from a finished (or interrupted) run into `Assets/Models/Brains/` with one command:
    ```powershell
-   python scripts/fix_onnx_for_unity.py
+   python scripts/fix_onnx_for_unity.py --from-run hurdles_v3
    ```
-   Once converted, the `.onnx.data` sidecar files can be removed (verify anytime with `python scripts/fix_onnx_for_unity.py --check`).
-4. Ensure each `.onnx` asset is assigned to **Model** (with **Deterministic Inference** checked for clean evaluation) on `Assets/ML-Agents/Walker/Prefabs/Ragdoll/WalkerRagdoll.prefab` and `Assets/ML-Agents/Prefabs/Crawler.prefab`.
-5. Press **Play**. *(Tip: click the **Gizmos** button at the top-right of the Unity Game View to hide the green raycast debug lines.)*
+   *(Or copy `.onnx` files manually into `Assets/Models/Brains/` and run `python scripts/fix_onnx_for_unity.py`; it auto-resolves matching `.onnx.data` files under `results/` and creates no extra sidecar files. Verify anytime with `python scripts/fix_onnx_for_unity.py --check`.)*
+2. Open `Assets/Scenes/HurdlesTraining.unity` and press **Play** (both prefabs already point to `HurdleWalker.onnx` / `HurdleCrawler.onnx` with **Deterministic Inference** checked). *(Tip: click the **Gizmos** button at the top-right of the Unity Game View to hide the green raycast debug lines.)*
 
 | Key | Action |
 |---|---|

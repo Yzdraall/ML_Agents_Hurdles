@@ -8,22 +8,25 @@ Unity Sentis (com.unity.ai.inference 2.x) fails on recent mlagents-learn exports
 4. Opset 18 / IR 10 exceed Sentis 2.5's baseline opset 15 target.
 
 Usage:
+    python scripts/fix_onnx_for_unity.py --from-run hurdles_v3
     python scripts/fix_onnx_for_unity.py [--check] [path/to/model.onnx ...]
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Iterable
 
 import numpy as np
 import onnx
-from onnx import TensorProto, checker, helper, numpy_helper, shape_inference
+from onnx import TensorProto, checker, external_data_helper, helper, numpy_helper, shape_inference
 
 TARGET_IR_VERSION = 8
 TARGET_OPSET = 15
 BATCH_DIM_NAME = "batch"
+DEFAULT_BEHAVIORS = ("HurdleWalker", "HurdleCrawler")
 DYNAMIC_BATCH_OUTPUTS = {
     "continuous_actions",
     "deterministic_continuous_actions",
@@ -33,8 +36,16 @@ DYNAMIC_BATCH_OUTPUTS = {
 }
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
 def _repo_brains_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "Assets" / "Models" / "Brains"
+    return _repo_root() / "Assets" / "Models" / "Brains"
+
+
+def _repo_results_dir() -> Path:
+    return _repo_root() / "results"
 
 
 def _set_dynamic_batch(value_info: onnx.ValueInfoProto) -> None:
@@ -46,33 +57,72 @@ def _set_dynamic_batch(value_info: onnx.ValueInfoProto) -> None:
     dim0.dim_param = BATCH_DIM_NAME
 
 
-def _inline_constant_nodes(graph: onnx.GraphProto, base_dir: Path) -> None:
-    """Inline any Constant node TensorProto attributes that still reference external data."""
-    for node in graph.node:
-        if node.op_type != "Constant":
-            continue
-        for attr in node.attribute:
-            if attr.name == "value" and attr.HasField("t") and attr.t.data_location == TensorProto.EXTERNAL:
-                arr = numpy_helper.to_array(attr.t, base_dir=str(base_dir))
-                attr.t.CopyFrom(numpy_helper.from_array(arr, name=attr.t.name))
-
-
-def convert_model(model: onnx.ModelProto, base_dir: Path) -> onnx.ModelProto:
-    """Return a Sentis-compatible inline opset-15 copy of an exported ML-Agents ONNX model."""
-    converted = onnx.ModelProto()
-    converted.CopyFrom(model)
-    graph = converted.graph
-
-    # 1. Inline all initializers so no external .onnx.data offset/seek bugs can occur.
+def _inline_initializers(model: onnx.ModelProto, ext_base_dir: Path | None = None) -> None:
+    """Convert all loaded initializers and Constant attributes into inline TensorProto payloads."""
+    graph = model.graph
     inlined_inits = [
         numpy_helper.from_array(numpy_helper.to_array(init), name=init.name)
         for init in graph.initializer
     ]
     del graph.initializer[:]
     graph.initializer.extend(inlined_inits)
-    _inline_constant_nodes(graph, base_dir)
 
-    # 2. Remove unused zero-width inputs left behind by dynamo tracing (e.g. action_masks, recurrent_in).
+    for node in graph.node:
+        if node.op_type != "Constant":
+            continue
+        for attr in node.attribute:
+            if attr.name == "value" and attr.HasField("t") and attr.t.data_location == TensorProto.EXTERNAL:
+                base = str(ext_base_dir) if ext_base_dir is not None else None
+                arr = numpy_helper.to_array(attr.t, base_dir=base)
+                attr.t.CopyFrom(numpy_helper.from_array(arr, name=attr.t.name))
+
+
+def _resolve_external_dir(locations: set[str], src_dir: Path, extra_dirs: Iterable[Path]) -> Path:
+    """Find the directory holding all external .onnx.data files referenced by a model."""
+    for candidate_dir in [src_dir, *extra_dirs]:
+        if candidate_dir.is_dir() and all((candidate_dir / loc).is_file() for loc in locations):
+            return candidate_dir
+
+    results_dir = _repo_results_dir()
+    if results_dir.is_dir():
+        for loc in locations:
+            matches = sorted(results_dir.rglob(Path(loc).name))
+            for match in matches:
+                candidate_dir = match.parent
+                if all((candidate_dir / item).is_file() for item in locations):
+                    return candidate_dir
+
+    missing = ", ".join(sorted(loc for loc in locations if not (src_dir / loc).is_file()))
+    raise FileNotFoundError(
+        f"External ONNX weights not found in '{src_dir}' or '{results_dir}': {missing}. "
+        "Copy the matching .onnx.data file alongside the .onnx or use --from-run <run-id>."
+    )
+
+
+def load_inlined_raw_model(src_path: Path, extra_dirs: Iterable[Path] = ()) -> onnx.ModelProto:
+    """Load an ONNX model, resolving external .onnx.data files from src_dir or results/."""
+    model = onnx.load(str(src_path), load_external_data=False)
+    ext_locations = {
+        entry.value
+        for init in model.graph.initializer
+        if init.data_location == TensorProto.EXTERNAL
+        for entry in init.external_data
+        if entry.key == "location"
+    }
+    ext_dir = _resolve_external_dir(ext_locations, src_path.parent, extra_dirs) if ext_locations else src_path.parent
+    if ext_locations:
+        external_data_helper.load_external_data_for_model(model, str(ext_dir))
+    _inline_initializers(model, ext_base_dir=ext_dir)
+    return model
+
+
+def convert_model(inlined_model: onnx.ModelProto) -> onnx.ModelProto:
+    """Return a Sentis-compatible inline opset-15 copy of an already inlined ML-Agents ONNX model."""
+    converted = onnx.ModelProto()
+    converted.CopyFrom(inlined_model)
+    graph = converted.graph
+
+    # 1. Remove unused zero-width inputs left behind by dynamo tracing (e.g. action_masks, recurrent_in).
     consumed_names = {inp for node in graph.node for inp in node.input if inp}
     consumed_names.update(out.name for out in graph.output)
     kept_inputs = []
@@ -85,7 +135,7 @@ def convert_model(model: onnx.ModelProto, base_dir: Path) -> onnx.ModelProto:
     del graph.input[:]
     graph.input.extend(kept_inputs)
 
-    # 3. Restore consistent symbolic 'batch' dimension on observation inputs and action outputs.
+    # 2. Restore consistent symbolic 'batch' dimension on observation inputs and action outputs.
     for inp in graph.input:
         if inp.name.startswith("obs_") or inp.name in {"vector_observation", "prev_action", "recurrent_in", "action_masks"}:
             _set_dynamic_batch(inp)
@@ -94,10 +144,10 @@ def convert_model(model: onnx.ModelProto, base_dir: Path) -> onnx.ModelProto:
         if out.name in DYNAMIC_BATCH_OUTPUTS:
             _set_dynamic_batch(out)
 
-    # 4. Drop stale static [1, ...] value_info annotations and re-infer shapes from the dynamic inputs.
+    # 3. Drop stale static [1, ...] value_info annotations and re-infer shapes from the dynamic inputs.
     del graph.value_info[:]
 
-    # 5. Normalize ONNX opset/IR to Sentis-supported baseline.
+    # 4. Normalize ONNX opset/IR to Sentis-supported baseline.
     converted.ir_version = TARGET_IR_VERSION
     if converted.opset_import:
         for opset in converted.opset_import:
@@ -183,62 +233,99 @@ def check_sentis_compliance(model_path: Path) -> None:
     checker.check_model(model, full_check=True)
 
 
-def iter_targets(paths: Iterable[str]) -> list[Path]:
+def _step_number(path: Path) -> int:
+    match = re.search(r"-(\d+)$", path.stem)
+    return int(match.group(1)) if match else -1
+
+
+def resolve_run_jobs(run_id: str) -> list[tuple[Path, Path, list[Path]]]:
+    """Map exported brains in results/<run-id>/ to Assets/Models/Brains/<Behavior>.onnx."""
+    run_dir = Path(run_id) if Path(run_id).is_dir() else _repo_results_dir() / run_id
+    if not run_dir.is_dir():
+        raise SystemExit(f"Run directory not found: {run_dir}")
+
+    brains_dir = _repo_brains_dir()
+    brains_dir.mkdir(parents=True, exist_ok=True)
+    jobs: list[tuple[Path, Path, list[Path]]] = []
+
+    for behavior in DEFAULT_BEHAVIORS:
+        final_onnx = run_dir / f"{behavior}.onnx"
+        behavior_dir = run_dir / behavior
+        extra_dirs = [d for d in (behavior_dir, run_dir) if d.is_dir()]
+
+        src = final_onnx if final_onnx.is_file() else None
+        if src is None:
+            candidates = []
+            for search_dir in extra_dirs:
+                candidates.extend(search_dir.glob(f"{behavior}-*.onnx"))
+            if candidates:
+                src = max(candidates, key=_step_number)
+
+        if src is not None:
+            jobs.append((src, brains_dir / f"{behavior}.onnx", extra_dirs))
+
+    if not jobs:
+        raise SystemExit(f"No HurdleWalker/HurdleCrawler .onnx files found under {run_dir}")
+    return jobs
+
+
+def resolve_inplace_jobs(paths: Iterable[str]) -> list[tuple[Path, Path, list[Path]]]:
+    """Resolve explicit .onnx paths/directories or default Assets/Models/Brains/*.onnx."""
     raw = list(paths)
     if not raw:
-        brains = _repo_brains_dir()
-        return sorted(p for p in brains.glob("*.onnx") if p.is_file())
-    resolved = []
-    for item in raw:
-        p = Path(item)
-        if p.is_dir():
-            resolved.extend(sorted(p.glob("*.onnx")))
-        else:
-            resolved.append(p)
-    return resolved
+        files = sorted(p for p in _repo_brains_dir().glob("*.onnx") if p.is_file())
+    else:
+        files = []
+        for item in raw:
+            p = Path(item)
+            files.extend(sorted(p.glob("*.onnx")) if p.is_dir() else [p])
+    return [(p, p, []) for p in files]
+
+
+def process_model(src_path: Path, dst_path: Path, extra_dirs: Iterable[Path]) -> None:
+    """Convert src_path into a Sentis-compliant model at dst_path and verify exact parity."""
+    tmp_ref = dst_path.with_suffix(".onnx.ref_tmp")
+    inlined_orig = load_inlined_raw_model(src_path, extra_dirs=extra_dirs)
+    fixed_model = convert_model(inlined_orig)
+
+    try:
+        onnx.save(inlined_orig, str(tmp_ref), save_as_external_data=False)
+        onnx.save(fixed_model, str(dst_path), save_as_external_data=False)
+        check_sentis_compliance(dst_path)
+        stats = verify_onnxruntime(dst_path, reference_path=tmp_ref)
+    finally:
+        if tmp_ref.exists():
+            tmp_ref.unlink()
+
+    print(f"[FIXED] {src_path} -> {dst_path.name}: {dst_path.stat().st_size / (1024 * 1024):.2f} MB | {stats}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Inline weights and fix ONNX exports for Unity Sentis.")
     parser.add_argument("models", nargs="*", help="Path(s) to .onnx files or directories (defaults to Assets/Models/Brains)")
+    parser.add_argument("--from-run", metavar="RUN_ID", help="Convert results/<RUN_ID> brains directly into Assets/Models/Brains/")
     parser.add_argument("--check", action="store_true", help="Verify Sentis compliance and ONNX Runtime outputs without rewriting")
     args = parser.parse_args()
 
-    targets = iter_targets(args.models)
-    if not targets:
+    if args.from_run and args.models:
+        raise SystemExit("Pass either --from-run RUN_ID or explicit model paths, not both.")
+    if args.from_run and args.check:
+        raise SystemExit("--check verifies saved .onnx files and cannot be combined with --from-run.")
+
+    jobs = resolve_run_jobs(args.from_run) if args.from_run else resolve_inplace_jobs(args.models)
+    if not jobs:
         raise SystemExit("No .onnx files found.")
 
-    for path in targets:
-        if not path.exists():
-            raise SystemExit(f"File not found: {path}")
+    for src_path, dst_path, extra_dirs in jobs:
+        if not src_path.exists():
+            raise SystemExit(f"File not found: {src_path}")
 
         if args.check:
-            check_sentis_compliance(path)
-            stats = verify_onnxruntime(path)
-            print(f"[OK] {path.name}: {path.stat().st_size / (1024 * 1024):.2f} MB | {stats}")
-            continue
-
-        tmp_ref = path.with_suffix(".onnx.ref_tmp")
-        orig_model = onnx.load(str(path), load_external_data=True)
-        fixed_model = convert_model(orig_model, path.parent)
-
-        # Materialize an inlined reference copy so ONNX Runtime comparison does not depend on external data files.
-        orig_inlined = onnx.ModelProto()
-        orig_inlined.CopyFrom(orig_model)
-        inlined = [numpy_helper.from_array(numpy_helper.to_array(i), name=i.name) for i in orig_inlined.graph.initializer]
-        del orig_inlined.graph.initializer[:]
-        orig_inlined.graph.initializer.extend(inlined)
-
-        try:
-            onnx.save(orig_inlined, str(tmp_ref), save_as_external_data=False)
-            onnx.save(fixed_model, str(path), save_as_external_data=False)
-            check_sentis_compliance(path)
-            stats = verify_onnxruntime(path, reference_path=tmp_ref)
-        finally:
-            if tmp_ref.exists():
-                tmp_ref.unlink()
-
-        print(f"[FIXED] {path.name}: {path.stat().st_size / (1024 * 1024):.2f} MB | {stats}")
+            check_sentis_compliance(src_path)
+            stats = verify_onnxruntime(src_path)
+            print(f"[OK] {src_path.name}: {src_path.stat().st_size / (1024 * 1024):.2f} MB | {stats}")
+        else:
+            process_model(src_path, dst_path, extra_dirs)
 
     return 0
 
