@@ -3,9 +3,10 @@ using UnityEngine.InputSystem;
 using UnityEngine.Serialization;
 
 // Frame-rate independent broadcast follow camera.
-//   Tab : cycle through agents
-//   L   : toggle auto-follow race leader
-//   H   : toggle live broadcast telemetry HUD
+//   Tab / Shift+Tab : cycle forward / backward through agents
+//   L               : toggle auto-follow race leader
+//   H               : toggle live broadcast telemetry HUD
+//   1 / 2 / 5       : set simulation speed (1x real-time / 2x / 0.5x slow-mo)
 public class CameraFollow : MonoBehaviour
 {
     [SerializeField] Transform target;
@@ -72,15 +73,22 @@ public class CameraFollow : MonoBehaviour
     void LateUpdate()
     {
         var keyboard = Keyboard.current;
-        if (keyboard != null && agents != null && agents.Length > 0)
+        if (keyboard != null)
         {
-            if (keyboard.tabKey.wasPressedThisFrame)
+            if (agents != null && agents.Length > 0)
             {
-                followLeader = false;
-                SelectAgent(agentIndex + 1);
+                if (keyboard.tabKey.wasPressedThisFrame)
+                {
+                    followLeader = false;
+                    int step = keyboard.shiftKey.isPressed ? -1 : 1;
+                    SelectAgent(agentIndex + step);
+                }
+                if (keyboard.lKey.wasPressedThisFrame) followLeader = !followLeader;
             }
-            if (keyboard.lKey.wasPressedThisFrame) followLeader = !followLeader;
             if (keyboard.hKey.wasPressedThisFrame) showBroadcastHud = !showBroadcastHud;
+            if (keyboard.digit1Key.wasPressedThisFrame || keyboard.numpad1Key.wasPressedThisFrame) Time.timeScale = 1f;
+            if (keyboard.digit2Key.wasPressedThisFrame || keyboard.numpad2Key.wasPressedThisFrame) Time.timeScale = 2f;
+            if (keyboard.digit5Key.wasPressedThisFrame || keyboard.numpad5Key.wasPressedThisFrame) Time.timeScale = 0.5f;
         }
 
         if (followLeader && agents != null && agents.Length > 0)
@@ -100,7 +108,7 @@ public class CameraFollow : MonoBehaviour
 
         if (target == null) return;
 
-        float dt = Time.deltaTime;
+        float dt = Mathf.Min(Time.unscaledDeltaTime, 0.1f);
         float posT = 1f - Mathf.Exp(-followSharpness * dt);
         float rotT = 1f - Mathf.Exp(-rotationSharpness * dt);
 
@@ -133,11 +141,12 @@ public class CameraFollow : MonoBehaviour
         float speedKmh = speedMs * 3.6f;
         string modeTag = followLeader ? "LEADER" : $"CAM {agentIndex + 1}/{(agents != null ? agents.Length : 1)}";
 
-        GUILayout.BeginArea(new Rect(16f, 16f, 300f, 130f), hudBoxStyle);
-        GUILayout.Label($"[{modeTag}] {activeAgent.name} ({activeAgent.BehaviorName})", hudTitleStyle);
+        GUILayout.BeginArea(new Rect(16f, 16f, 360f, 150f), hudBoxStyle);
+        GUILayout.Label($"[{modeTag}] {activeAgent.name} ({activeAgent.BehaviorName})   [{Time.timeScale:0.#}x]", hudTitleStyle);
         GUILayout.Label($"Chrono : {activeAgent.EpisodeTimeSeconds:00.00} s   |   Speed : {speedMs:0.0} m/s ({speedKmh:0.0} km/h)", hudBodyStyle);
         GUILayout.Label($"Hurdles : {activeAgent.HurdlesClearedCount}        |   Track : {activeAgent.TrackProgress01 * 100f:0.0}%", hudBodyStyle);
-        GUILayout.Label("[Tab] Next Agent   [L] Auto-Leader   [H] Hide HUD", hudBodyStyle);
+        GUILayout.Label("[Tab] Next   [Shift+Tab] Prev   [L] Leader   [H] HUD", hudBodyStyle);
+        GUILayout.Label("Speed : [1] 1x   [2] 2x   [5] 0.5x", hudBodyStyle);
         GUILayout.EndArea();
     }
 }

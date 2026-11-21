@@ -891,6 +891,8 @@ public abstract class HurdleAgentBase : Agent
         float driftFraction = Mathf.Clamp01(absLateral / safeMaxDrift);
         float laneAlignment = 1f - 0.5f * driftFraction;
         float lookAt = LookAtTrackReward();
+        float uprightAlignment = Mathf.Clamp01(0.5f + 0.5f * Vector3.Dot(root.rotation * rootLocalUp, Vector3.up));
+        float postureMultiplier = lookAt * laneAlignment * uprightAlignment;
 
         // 1. Strict forward progress reward (cannot be farmed by going slowly or oscillating).
         float progress = Progress;
@@ -898,7 +900,7 @@ public abstract class HurdleAgentBase : Agent
         float deltaProgress = clampedProgress - maxProgress;
         if (deltaProgress > 0f)
         {
-            AddReward(progressRewardScale * (deltaProgress / trackLength) * lookAt * laneAlignment);
+            AddReward(progressRewardScale * (deltaProgress / trackLength) * postureMultiplier);
             maxProgress = clampedProgress;
         }
 
@@ -909,7 +911,7 @@ public abstract class HurdleAgentBase : Agent
         }
 
         // 2. Mass-weighted CoM forward sprint shaping.
-        AddReward(velocityShapingScale * ForwardSpeedReward() * lookAt * laneAlignment);
+        AddReward(velocityShapingScale * ForwardSpeedReward() * postureMultiplier);
 
         // 3. Lane centering, time efficiency, effort, and smoothness costs.
         AddReward(-laneCenterPenalty * driftFraction * driftFraction - timePenalty);

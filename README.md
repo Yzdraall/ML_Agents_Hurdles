@@ -43,9 +43,10 @@ Assets/
   Scenes/HurdlesTraining.unity   parallel training & showcase scene (16 walkers + 16 crawlers)
   ML-Agents/                 WalkerRagdoll and Crawler prefabs
   Models/Brains/             exported ONNX brains (LFS-tracked; PyTorch .pt files are git-ignored)
-config/hurdles.yaml          unified PPO + curriculum configuration
-Docs/images/                 architecture & TensorBoard training curves
-results/                     mlagents-learn training outputs (git-ignored)
+config/hurdles.yaml           unified PPO + curriculum configuration
+scripts/fix_onnx_for_unity.py  converts PyTorch 2.6+ ONNX + .onnx.data into inline opset-15 Sentis models
+Docs/images/                   architecture & TensorBoard training curves
+results/                       mlagents-learn training outputs (git-ignored)
 ```
 
 ---
@@ -112,16 +113,26 @@ Each behavior advances independently through 4 lessons based on smoothed mean ep
 
 ## Inference & Broadcast Camera Controls
 
+`Assets/Models/Brains/HurdleWalker.onnx` and `HurdleCrawler.onnx` are pre-converted for Unity Sentis and wired to both prefabs (`Behavior Type: Default`, `Deterministic Inference: On`), so opening `Assets/Scenes/HurdlesTraining.unity` and pressing **Play** runs all 32 agents standalone out of the box.
+
+When exporting newly trained brains with PyTorch 2.6+ (`mlagents==1.1.0`), PyTorch defaults to `dynamo=True`, producing opset-18 `.onnx` + `.onnx.data` files that break Unity Sentis (`ONNXConstantsLoader` reads external weights without seeking to `offset`, `action_masks`/`recurrent_in` remain 0-width, and action outputs have static batch `1`). Run the converter before pressing **Play**:
+
 1. Open `Assets/Scenes/HurdlesTraining.unity`.
-2. Copy `results/<run-id>/HurdleWalker.onnx` and `results/<run-id>/HurdleCrawler.onnx` (plus their `.onnx.data` weight files!) into `Assets/Models/Brains/`.
-3. Assign each `.onnx` asset to the **Model** field of **Behavior Parameters** on `Assets/ML-Agents/Walker/Prefabs/Ragdoll/WalkerRagdoll.prefab` and `Assets/ML-Agents/Prefabs/Crawler.prefab`.
-4. Press **Play**.
+2. Copy `results/<run-id>/HurdleWalker.onnx` and `results/<run-id>/HurdleCrawler.onnx` (and their `.onnx.data` files if present) into `Assets/Models/Brains/`.
+3. Inline weights and fix dynamic batch / opset-15 shapes for Unity Sentis:
+   ```powershell
+   python scripts/fix_onnx_for_unity.py
+   ```
+   Once converted, the `.onnx.data` sidecar files can be removed (verify anytime with `python scripts/fix_onnx_for_unity.py --check`).
+4. Ensure each `.onnx` asset is assigned to **Model** (with **Deterministic Inference** checked for clean evaluation) on `Assets/ML-Agents/Walker/Prefabs/Ragdoll/WalkerRagdoll.prefab` and `Assets/ML-Agents/Prefabs/Crawler.prefab`.
+5. Press **Play**. *(Tip: click the **Gizmos** button at the top-right of the Unity Game View to hide the green raycast debug lines.)*
 
 | Key | Action |
 |---|---|
-| `Tab` | Camera: cycle to next agent |
+| `Tab` / `Shift+Tab` | Camera: cycle to next / previous agent |
 | `L` | Camera: toggle **Auto-Follow Race Leader** |
-| `H` | Camera: toggle **Live Broadcast HUD** (Chrono, Speed `km/h`, Hurdles, Progress `%`) |
+| `H` | Camera: toggle **Live Broadcast HUD** (Chrono, Speed `km/h`, Hurdles, Progress `%`, `TimeScale`) |
+| `1` / `2` / `5` | Simulation speed: `1x` (real-time) / `2x` / `0.5x` (slow-motion) — works on top row & Numpad |
 | `[` / `]` | Heuristic (no model): select previous / next joint |
 | `Up`/`Down` or `W`/`S` | Heuristic: drive selected joint X axis |
 | `Left`/`Right` or `A`/`D` | Heuristic: drive selected joint Y axis |
@@ -140,11 +151,11 @@ All directional vectors are rotated into the lane's horizontal track frame (`for
 | Root linear velocity | 3 | Track frame |
 | Root angular velocity | 3 | Track frame |
 | Root forward & up vectors | 6 | Track frame (`3 + 3`) |
-| Root height above track floor | 1 | Normalised by `heightObservationScale` (`5 m`) |
+| Root height offset | 1 | `(root.y - rootStartY) / heightObservationScale` (`5 m`) |
 | Track progress | 1 | Clamped in `[0, 1]` |
 | Lateral lane offset | 1 | Signed offset normalised by `maxLaneDrift` (`[-1, 1]`) |
 | Next hurdle signed distance | 1 | `[-0.2, 1]` — stays active `1.0 m` past hurdle for trailing-leg clearance |
-| Next hurdle top height above floor | 1 | Normalised by `heightObservationScale` |
+| Next hurdle top height offset | 1 | `(hurdleTopY - rootStartY) / heightObservationScale` |
 | Per actuated joint: local rotation | 4 | Quaternion |
 | Per actuated joint: rel. angular vel. | 3 | Track frame, relative to root |
 | Per actuated joint: current strength | 1 | `[0, 1]` |
@@ -159,8 +170,8 @@ All directional vectors are rotated into the lane's horizontal track frame (`for
 
 | Term | Formula / Value | Purpose |
 |---|---|---|
-| **Forward Progress** | `+15.0 × (ΔmaxProgress / trackLength) × lookAt × laneAlign` | Strict potential-based progress; **un-farmable** by oscillating or going slow |
-| **Sprint Shaping** | `+0.003 × clamp01(v_fwd / 12) × exp(-0.25 v_lat²) × lookAt × laneAlign` | Dense forward sprint signal; never penalises exceeding `12 m/s` |
+| **Forward Progress** | `+15.0 × (ΔmaxProgress / trackLength) × lookAt × laneAlign × uprightAlign` | Strict potential-based progress; rewards upright posture (`0.5 + 0.5·dot(rootUp, up)`) and prevents backward-lean "kangaroo" hopping |
+| **Sprint Shaping** | `+0.003 × clamp01(v_fwd / 12) × exp(-0.25 v_lat²) × lookAt × laneAlign × uprightAlign` | Dense forward sprint signal; never penalises exceeding `12 m/s` |
 | **Hurdle Row Cleared** | `+0.5` per active row | Rewards clearing each of the 7 lane hurdle rows |
 | **Finish + Speed Bonus** | `+10.0 + 10.0 × (1 - step / MaxStep)` | Strong terminal incentive to finish in minimum time |
 | **Hurdle Hit** | `-0.5` (once per hurdle row) | Discourages ploughing through hurdles |
@@ -181,7 +192,7 @@ Tracked per behavior via `StatsRecorder`:
 
 ### Engine & PhysX 5 Optimizations
 
-- **Temporal Gauss-Seidel (`TGS`) Solver** (`m_SolverType: 1`, `12` position / `2` velocity iterations, `75 Hz` fixed timestep) with calibrated `WorldBounds` across all 16 arenas and `m_GenerateOnTriggerStayEvents` disabled.
+- **Projected Gauss-Seidel (`PGS`) Solver** (`m_SolverType: 0`, `20` position / `1` velocity iterations, `75 Hz` fixed timestep) with calibrated `WorldBounds` across all 16 arenas and `m_GenerateOnTriggerStayEvents` disabled — keeps ragdoll joint stiffness consistent with trained `HurdleWalker`/`HurdleCrawler` checkpoints.
 - **Kinematic Hurdle Rows (Zero Static BVH Rebuilds)**: lane hurdles receive kinematic `Rigidbody` components at startup so per-episode spacing/height randomisation updates dynamic pruning in $O(1)$ instead of rebuilding PhysX's global Static Collider BVH.
 - **Zero-GC Hot Path & Dirty-Checked Joints**: flat contiguous `struct` arrays (`BodyPart[]`, `Muscle[]`), cached joint transforms/limits, reference-cached floor colliders (skipping `CompareTag` marshaling on `OnCollisionStay`), pre-cached `StatsRecorder` keys, mass-weighted Center-of-Mass (`CoM`) sprint velocity, and dirty-checked `ConfigurableJoint` writes (skips 80% of redundant native PhysX writes between decisions).
 - **Headless Batchmode Stripper**: automatically disables `Camera`, `AudioListener`, and HUD rendering when launched with `--no-graphics`.

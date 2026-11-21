@@ -2774,14 +2774,14 @@ MonoBehaviour:
     VectorActionDescriptions: []
     VectorActionSpaceType: 1
     hasUpgradedBrainParametersWithActionSpec: 1
-  m_Model: {fileID: 0}
+  m_Model: {fileID: 5022602860645237092, guid: bfbeddc423e41df4385e75d3dd046aa5, type: 3}
   m_InferenceDevice: 2
   m_BehaviorType: 0
   m_BehaviorName: HurdleWalker
   TeamId: 0
   m_UseChildSensors: 1
   m_UseChildActuators: 1
-  m_DeterministicInference: 0
+  m_DeterministicInference: 1
   m_ObservableAttributeHandling: 0
 --- !u!1 &4677568880406971097
 GameObject:

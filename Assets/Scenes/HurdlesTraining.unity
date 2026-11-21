@@ -4320,12 +4320,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -4889,12 +4892,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -6176,12 +6182,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -7472,12 +7481,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -8985,12 +8997,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -12309,12 +12324,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -15671,12 +15689,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -15743,12 +15764,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -16414,12 +16438,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -18987,12 +19014,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -21985,6 +22015,9 @@ MonoBehaviour:
   target: {fileID: 141421148}
   offset: {x: 70.4, y: 30.5, z: -14.6}
   followSharpness: 5
+  rotationSharpness: 8
+  followLeader: 0
+  showBroadcastHud: 1
 --- !u!1001 &330916801
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -23353,12 +23386,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -31666,12 +31702,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -37992,12 +38031,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -39518,12 +39560,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -44405,12 +44450,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -46191,12 +46239,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -47886,12 +47937,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -49632,16 +49686,8 @@ PrefabInstance:
       value: 7
       objectReference: {fileID: 0}
     - target: {fileID: 3599283675615088294, guid: dd62a2a5a838943fba3d2cbb377a75b3, type: 3}
-      propertyPath: m_Model
-      value: 
-      objectReference: {fileID: 0}
-    - target: {fileID: 3599283675615088294, guid: dd62a2a5a838943fba3d2cbb377a75b3, type: 3}
-      propertyPath: m_BehaviorType
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 3599283675615088294, guid: dd62a2a5a838943fba3d2cbb377a75b3, type: 3}
       propertyPath: m_InferenceDevice
-      value: 0
+      value: 2
       objectReference: {fileID: 0}
     - target: {fileID: 3649524790373613545, guid: dd62a2a5a838943fba3d2cbb377a75b3, type: 3}
       propertyPath: m_Layer
@@ -49871,12 +49917,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -51390,12 +51439,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -79029,12 +79081,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -88788,12 +88843,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -92067,12 +92125,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -93198,16 +93259,8 @@ PrefabInstance:
       value: 6
       objectReference: {fileID: 0}
     - target: {fileID: 4845971001715176648, guid: 0456c89e8c9c243d595b039fe7aa0bf9, type: 3}
-      propertyPath: m_Model
-      value: 
-      objectReference: {fileID: 0}
-    - target: {fileID: 4845971001715176648, guid: 0456c89e8c9c243d595b039fe7aa0bf9, type: 3}
-      propertyPath: m_BehaviorType
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 4845971001715176648, guid: 0456c89e8c9c243d595b039fe7aa0bf9, type: 3}
       propertyPath: m_InferenceDevice
-      value: 0
+      value: 2
       objectReference: {fileID: 0}
     - target: {fileID: 4845971001715176651, guid: 0456c89e8c9c243d595b039fe7aa0bf9, type: 3}
       propertyPath: m_LocalScale.x
@@ -94857,12 +94910,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -95631,12 +95687,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -109281,12 +109340,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -111397,12 +111459,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -113047,12 +113112,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -115084,12 +115152,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -115850,12 +115921,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -120731,12 +120805,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -122321,12 +122398,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
@@ -126442,12 +126522,15 @@ MonoBehaviour:
   timePenalty: 0.0015
   laneCenterPenalty: 0.002
   effortPenalty: 0.002
+  smoothnessPenalty: 0.001
   hurdleClearedReward: 0.5
   targetReachedReward: 10
   finishSpeedBonus: 10
   fallPenalty: -1
   hurdleHitPenalty: -0.5
   uprightThreshold: 0.15
+  maxStallSteps: 300
+  minProgressAdvance: 0.25
   hurdleSpacingJitter: 1
   startLateralJitter: 0.3
   startYawJitter: 10
